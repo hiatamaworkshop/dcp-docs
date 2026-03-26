@@ -25,13 +25,4 @@ Compact structured data delivery for AI agents. Positional arrays, schema regist
 - **Adaptive density** — System observes agent capability and adjusts schema verbosity automatically.
 - **L0 (fields only) is optimal for lightweight models** — Protocol markers are noise at ≤4B.
 
-## Local Development
-
-```bash
-npm install
-npm run dev      # dev server
-npm run build    # production build
-npm run preview  # preview build
-```
-
 Built with [VitePress](https://vitepress.dev).
