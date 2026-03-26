@@ -20,6 +20,9 @@ features:
   - title: Multi-Level Shadow Index
     details: Communication mode spectrum from abbreviated (L0) to full NL fallback. Dynamically selected per agent capability.
     link: /dcp/shadow-index
+  - title: Schema-Driven Encoder
+    details: Schema as single source of truth. Load a schema, get an encoder. No domain knowledge in code — new data types are config, not programming.
+    link: /dcp/schema-driven-encoder
   - title: Agent Profile Adaptation
     details: Observe per-agent error rates, adjust hint density automatically. TCP slow-start for data formats.
     link: /dcp/agent-profile
