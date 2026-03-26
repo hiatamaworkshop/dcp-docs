@@ -2,6 +2,16 @@
 
 > If no human reads the data, there's no reason to write it in a human-readable format.
 
+## Principle: Respect What LLMs Are
+
+LLMs are **Large Language Models**. They exist because human language is ambiguous, contextual, and rich — and these models learned to navigate that richness. Their strength is understanding intent, reasoning through nuance, and communicating with humans.
+
+DCP optimizes the **data delivery channel** — the structured input that feeds an LLM's reasoning. It does not attempt to replace, constrain, or diminish the LLM's natural language capabilities. When an LLM reasons, explains, or communicates, it should do so in natural language. That is what it was built for.
+
+Structured output (classification, scoring, metadata) is sometimes needed, and DCP provides optional tools for that. But forcing an LLM to produce positional arrays is like asking a poet to fill spreadsheets — possible, but disrespectful of the capability. Where structured transformation is needed, it belongs in a dedicated data processing layer (a lightweight mathematical model, a deterministic formatter), not in the LLM itself.
+
+**DCP's scope**: optimize what goes *into* the LLM. What comes *out* is the LLM's domain.
+
 ## The Problem
 
 LLMs produce and consume text at extraordinary cost. Every token matters — in API billing, context window budget, and inference latency. Yet the data AI agents exchange with each other is overwhelmingly formatted for human readability: verbose JSON with repeated keys, natural language descriptions where structured data would suffice, self-documenting formats read by no one.
