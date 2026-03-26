@@ -104,37 +104,87 @@ The encoder accepts a `shadow_level` parameter that controls header density. The
 
 Data rows are identical across L0–L3 (positional arrays). Only L4 switches to key-value text.
 
-## Output Controller — AI → System Direction
+## Output Controller — Shadow Index as Output Constraint
 
-LLMs can't produce positional arrays, but sometimes need to output structured DCP data (e.g., writing knowledge entries). The Output Controller solves this by separating **meaning determination** (LLM) from **structural placement** (system):
+::: tip When to use
+The output controller is **optional**. It applies only when the system needs structured output from an AI — classification, scoring, metadata tagging. For reasoning, analysis, and explanation, natural language output is correct. LLMs excel at LLM → human communication; constraining that expressiveness to positional arrays is a design error, not an optimization.
+:::
 
-```
-LLM outputs key-value:
-  { "action": "replace", "domain": "auth", "detail": "jwt migration", "confidence": 0.9 }
+The [Shadow Index](./shadow-index) was designed for input delivery — choosing how much schema information to attach when sending data to an AI. But the same mechanism works in reverse: **presenting a schema as an output constraint**.
 
-OutputController places by schema order:
-  ["replace", "auth", "jwt migration", 0.9]
-```
-
-The controller does no semantic inference — if the LLM says `action="replace"`, it goes in the position the schema defines. Extra keys are ignored, missing keys become null, values are validated against schema types.
-
-This is the DCP equivalent of a form for humans: the LLM fills in fields, the system enforces structure. It enables AI → AI communication via a [Gateway](./shadow-index):
+### The Three-Stage Model
 
 ```
-Agent A → {key: value} → Gateway (OutputController) → DCP → Agent B
+Input Shadow   →   AI   →   Output Shadow (= Controller)   →   Cap
+ (Schema A)              (Schema A or B, re-presented)     (safety net)
 ```
+
+1. **Input**: System delivers data via shadow index. AI reads it without awareness of DCP mechanics.
+2. **Output constraint**: System re-presents a shadow index — the same schema or a different one — as a response format. "Answer using these fields, in these ranges." The AI is prompted to respond within the schema's constraints.
+3. **Cap**: Any output that still deviates is clamped — enum values outside the defined set are rejected, numbers outside range are clipped, missing fields become null.
+
+### The Controller Is Not a Separate Mechanism
+
+The key insight: **the output controller is just the shadow index applied in the output direction**. No new infrastructure is needed.
+
+- **Same schema for input and output**: Re-present the input shadow. Additional cost ≈ 0 (already in context).
+- **Different schema for input and output**: Present Schema B's shadow index as the output constraint. Cost = one shadow index presentation.
+
+There is nothing in the system beyond schema definitions, shadow indexes, and caps. "Controller" is not a component — it is a usage pattern of the shadow index.
+
+### Why This Works
+
+DCP schemas already define the constraint space:
+
+- `enum` fields → selection from fixed choices
+- Numeric ranges (`weight: 0-1`) → bounded judgment
+- Field definitions → what to answer, not just how
+
+When the AI sees `["action(enum:add|replace|remove)", "domain", "detail", "confidence:0-1"]` as an output format, its judgment space is structurally limited. The AI decides *which* action and *what* confidence — the schema prevents it from inventing fields or producing unbounded values.
+
+```
+Prompt:  "Evaluate this change. Respond as: [action(add|replace|remove), domain, detail, confidence:0-1]"
+
+AI output:  ["replace", "auth", "jwt migration to RS256", 0.85]
+            ↓
+Cap:        action ∈ {add,replace,remove} ✓, confidence ∈ 0-1 ✓ → pass through
+
+AI output:  "I think we should replace the auth module because..."
+            ↓
+Cap:        not array → parse key-value → place by schema order → clamp values
+```
+
+The cap handles the residual — it does not drive the design. Most outputs from capable models will already conform because the constraint was presented upfront.
+
+### Comparison with tool_use
+
+Modern LLM APIs offer JSON schema constraints via tool_use / function calling. The DCP controller pattern differs in two ways:
+
+1. **Schema reuse**: tool_use embeds the full schema in every call. DCP presents it once via shadow index, then omits it — same schema, zero repeated cost.
+2. **Graceful degradation**: tool_use rejects non-conforming output. DCP caps it — accepting the intent, correcting the structure.
 
 ## Gateway Architecture
 
-The Gateway holds the schema registry, encoder, controller, and agent profiles together:
+The Gateway holds schema registry, encoder, and agent profiles together:
 
 ```
 Gateway
-  ├── SchemaRegistry          — all schema definitions (single source of truth)
-  ├── AgentProfile            — per-agent error rate, shadow level
-  ├── Encoder                 — schema-driven, receives shadow_level as argument
-  ├── OutputController        — places LLM key-value output into positional arrays
-  └── Validator               — checks LLM output against schema, feeds back to profile
+  ├── SchemaRegistry     — all schema definitions (single source of truth)
+  ├── AgentProfile       — per-agent error rate, shadow level
+  ├── Shadow Index       — input delivery AND output constraint (same mechanism)
+  ├── Encoder            — schema-driven, receives shadow_level as argument
+  ├── Cap                — clamps deviations (enum, range, type, missing fields)
+  └── Validator          — checks output, feeds back to AgentProfile
 ```
 
-The schema is the dictionary. The gateway is the librarian — it looks at who's asking and decides which page to open.
+The system has three concepts: **schemas** (what the data looks like), **shadow indexes** (how much to show, in both directions), and **caps** (safety net for deviations). Everything else is derived.
+
+### AI → AI: Gateway Is Not Always the Answer
+
+Routing every agent-to-agent exchange through a central gateway adds latency and a single point of failure. For AI → AI communication, two lighter patterns exist:
+
+**Edge pattern**: Each agent receives its schema-shadow + controller upfront. Agents output constrained data directly to the next agent, without a gateway round-trip. The schema travels with the agent, not with the infrastructure.
+
+**Brain-managed pattern**: A brain AI holds the schema context and interprets child agent outputs — reformatting, validating, and routing as part of its own reasoning. No separate gateway process; the brain *is* the gateway.
+
+Both patterns move schema intelligence to where the work happens. The central gateway remains valuable for schema registry, agent profiling, and cross-session persistence — but it is not required on every exchange.

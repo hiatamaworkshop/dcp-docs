@@ -137,11 +137,7 @@ The registry serves as the single source of truth. Schemas are available via API
 
 - **Schema travels with data.** No external docs to drift out of sync. Read the header, parse the rows.
 
-- **System → AI is the primary direction.** LLMs cannot reliably generate positionally correct arrays (0% correct ordering at ≤3.8B). For the reverse direction, LLMs output key-value pairs and a system-side [Output Controller](./schema-driven-encoder) places values into schema-ordered positions. This enables AI → AI communication via a gateway:
-
-  ```
-  Agent A → {key: value, ...} → Gateway (OutputController) → DCP → Agent B
-  ```
+- **System → AI is the primary direction.** LLMs cannot reliably generate positionally correct arrays (0% correct ordering at ≤3.8B). For the AI → system direction, the [shadow index](./shadow-index) is re-presented as an output constraint — the same schema that delivered the input now constrains the output. Deviations are [capped](./schema-driven-encoder#output-controller-shadow-index-as-output-constraint) as a safety net. No separate output mechanism exists.
 
 - **Normalize values for token cost.** LLM tokenizers treat `0.36` (2 tokens) differently from `92` (1 token). Use the simplest representation: integers 0-100 over floats 0.00-1.00, seconds over milliseconds, `0`/`1` over `true`/`false`.
 

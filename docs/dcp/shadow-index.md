@@ -1,5 +1,7 @@
 # Multi-Level Shadow Index
 
+The shadow index is DCP's unified mechanism for both **input delivery** and **output constraint**. The same schema presentation that tells an AI "here's what this data means" also tells it "respond in this shape." This dual role is not a design coincidence — it is a consequence of DCP's constraint-first approach. Because DCP defines strict schema structure upfront, the same tool naturally applies in both directions.
+
 ## Why Schema Management Matters
 
 DCP's [specification](./specification) states that a high-capability AI agent only needs to see the schema **once** — after that, bare positional arrays are sufficient. The schema becomes zero-cost overhead.
@@ -88,6 +90,23 @@ Key findings:
 - **Model-specific variance exists** — gemma2 prefers L2, others prefer L0.
 
 See [Research: Lightweight LLM Compatibility](/research/lightweight-llm) for full test data.
+
+## Output Direction — Shadow Index as Controller
+
+The shadow index applies in the output direction with no additional mechanism. When the system needs structured output from an AI, it re-presents a shadow index as a response constraint:
+
+```
+Input:   Shadow(Schema A) → AI reads data
+Output:  Shadow(Schema A or B) → AI responds within constraint → Cap clamps deviations
+```
+
+**Same schema**: The input shadow is already in context. Re-presenting it as "respond in this format" costs ≈ 0 additional tokens.
+
+**Different schema**: A new shadow index (Schema B) is presented as the output format. Cost = one shadow presentation — the same cost as any input delivery.
+
+The system needs no "output controller" as a separate component. The shadow index handles both directions. Residual deviations (wrong enum value, out-of-range number, free-text instead of array) are caught by a **cap** — a simple validator that clamps values to schema constraints. See [Schema-Driven Encoder: Output Controller](./schema-driven-encoder#output-controller-shadow-index-as-output-constraint) for implementation details.
+
+This unification is a direct consequence of DCP's constraint-first design. Free-form protocols (JSON, NL) require separate mechanisms for input formatting, output parsing, validation, and error handling. DCP's positional schema defines the constraint space once — input and output are just two directions through the same constraint.
 
 ## From Delivery Mode to Task Access Level
 
