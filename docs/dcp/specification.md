@@ -57,7 +57,7 @@ With DCP:
 ["/v1/users","GET",200,42]
 ["/v1/orders","POST",201,187]
 ["/v1/auth","POST",200,95]
-["/v1/search","GET",312,200]
+["/v1/search","GET",200,312]
 ```
 
 4 records: JSON repeats 4 key names × 4 rows = 16 keys. DCP states them once. ~50% metadata reduction. At scale (hundreds of records per analysis), the savings compound.
