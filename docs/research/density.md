@@ -1,5 +1,3 @@
 # Schema Density
 
-::: warning WIP
-Content to be discussed and written.
-:::
+This content has been merged into [Lightweight LLM Compatibility & Density](./lightweight-llm#schema-density).

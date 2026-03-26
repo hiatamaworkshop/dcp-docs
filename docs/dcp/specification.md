@@ -37,56 +37,30 @@ With DCP:
 [[1,"Alice",92],[2,"Bob",85],[3,"Charlie",88]]
 ```
 
-### Real-world case: AI agent session handoff
+### Real-world case: API monitoring data
 
-A session's emotional trajectory, passed from one agent session to the next:
+A batch of API response metrics fed to an LLM for analysis:
 
 ```json
-{
-  "timestamp": 17900,
-  "gap": 0,
-  "state": "exploring",
-  "intensity": 0.36,
-  "frustration": 0,
-  "seeking": -0.36,
-  "confidence": 0,
-  "fatigue": 0.03,
-  "flow": 0
-}
+[
+  { "endpoint": "/v1/users", "method": "GET", "status": 200, "latency_ms": 42 },
+  { "endpoint": "/v1/orders", "method": "POST", "status": 201, "latency_ms": 187 },
+  { "endpoint": "/v1/auth", "method": "POST", "status": 200, "latency_ms": 95 },
+  { "endpoint": "/v1/search", "method": "GET", "status": 200, "latency_ms": 312 }
+]
 ```
 
 With DCP:
 
 ```
-[schema: A=arc(t,gapMs,state,intensity,frust,seek,conf,fatigue,flow)]
-["A",17900,0,"exploring",0.36,0,-0.36,0,0.03,0]
+["$S","api-response:v1",4,"endpoint","method","status","latency_ms"]
+["/v1/users","GET",200,42]
+["/v1/orders","POST",201,187]
+["/v1/auth","POST",200,95]
+["/v1/search","GET",312,200]
 ```
 
-One record, ~70% smaller. A session produces dozens to hundreds of these. The savings compound.
-
-## Three-Line Wire Format
-
-For streaming heterogeneous data, DCP uses a three-line structure:
-
-```
-[manifest: what this data is and why it exists]
-[schema: field definitions for all record types]
-[...data...]
-```
-
-Manifest declares intent. Schema declares structure. Data follows. A receiving agent reads three lines and knows everything it needs — no external docs, no API reference, no guesswork.
-
-### Live example — Prior Block
-
-```
-[prior-block: prior session experience. use as context for continuity.]
-[schema: H=header(durationMs,valenceBalance,frust,seek,conf,fatigue,flow,stateFlow)
-         A=arc(t,gapMs,agentState,intensity,dFrust,dSeek,dConf,dFatig,dFlow,engramId?)
-         F=footer(finalEmotion[5],stats[5],stateRatio[...],engramTop[...],hotPaths[...],methodRank[...])]
-[["H",681804,1,0,-0.36,0,0.03,0,"exploring→deep_work"],["---"],["A",17900,0,...],...]
-```
-
-This carries a full session's emotional trajectory — state transitions, emotion deltas, file access patterns, method rankings, knowledge references — in under 2KB. The natural language equivalent exceeds 30KB.
+4 records: JSON repeats 4 key names × 4 rows = 16 keys. DCP states them once. ~50% metadata reduction. At scale (hundreds of records per analysis), the savings compound.
 
 ## The `$S` Header — Schema-on-Wire
 
@@ -116,7 +90,9 @@ When both producer and consumer already know the schema, the header can be **abb
 ["quality","push","no-type-tag","auth jwt migration fix"]
 ```
 
-This is the density spectrum in action — the same protocol at different verbosity levels depending on context.
+The system selects verbosity by the consumer's capability and session state. The full header is for agents handling multiple schemas simultaneously; single-schema consumers need only the field names.
+
+For lightweight models (≤4B), field names alone produce the best comprehension — protocol markers are noise at this size. See [Shadow Index](./shadow-index) for the 5-level density spectrum and [Lightweight LLM results](/research/lightweight-llm) for test data.
 
 ## Fixed-Length Principle
 
@@ -130,21 +106,7 @@ DCP arrays are fixed-length by design. Every record in a schema has the same num
 
 ### Last-field escape hatch
 
-The final field of any record type may carry an optional, free-form structure:
-
-```
-[schema: A=arc(t,gapMs,state,intensity,frust,seek,conf,fatigue,flow,ext?)]
-["A",1200,0,"stuck",0.42,0.35,0.12,0.08,0.60,{"note":"retry after timeout","ctx":[1,2]}]
-["A",1400,200,"exploring",0.28,0.40,0.18,0.06,0.65]
-```
-
-Rules:
-- Only the **last** field. Interior fields stay positional and typed.
-- **Optional** — omitting it is normal, not exceptional.
-- The preceding fields remain fixed-length. Index stability is preserved.
-- What goes in the last field is unconstrained — object, array, string, null.
-
-This is the escape hatch, not the norm. A well-designed schema rarely needs it. But DCP itself is a voluntary convention with no enforcement mechanism — it cannot forbid what it cannot police. Acknowledging this formally keeps schemas honest: if a domain needs extensibility, it flows through a defined channel rather than corrupting the positional structure.
+The final field may optionally carry a free-form value (object, array, null). Interior fields stay positional. A well-designed schema rarely needs this.
 
 ## Schema Registry
 
@@ -167,37 +129,21 @@ Schemas are centralized as JSON definitions in a registry. Each schema declares 
 
 The registry serves as the single source of truth. Schemas are available via API (`GET /schemas`, `GET /schemas/:id`), embedded in tool descriptions, and referenced by hash for cache validation.
 
-## Normalize Values
-
-LLM tokenizers treat numbers differently by form. `0.36` costs 2 tokens; `92` costs 1. Precision the consumer doesn't need is wasted tokens.
-
-DCP recommends normalizing values to the simplest representation that preserves meaning:
-
-- Emotion axes at 0.01 precision? Consider integers 0-100 instead of floats 0.00-1.00
-- Timestamps in milliseconds? If second granularity suffices, divide first
-- Boolean-like values? `0`/`1` over `true`/`false` (fewer tokens)
-
-Match data resolution to the consumer's actual needs — the same principle as choosing `int16` over `float64` in binary protocols, applied to token cost.
-
 ## Design Properties
 
-### "Self-describing" vs "Pre-agreed"
+- **Pre-agreed, not self-describing.** JSON repeats keys per record for human browsability. DCP declares the schema once — like Protocol Buffers and MessagePack, but in text because LLMs consume text.
 
-JSON is self-describing: every value carries its own key. This is friendly for humans who browse raw data. For machines processing thousands of records, those keys are pure waste — the consumer already knows the schema.
+- **Position is meaning.** The same convention as CSV, function arguments, and array indexing — applied to AI data delivery.
 
-DCP is pre-agreed: the schema is declared once, and all subsequent records follow it implicitly. This is how binary protocols (Protocol Buffers, MessagePack) have always worked. DCP applies the same principle to text — because LLMs consume text, not binary.
+- **Schema travels with data.** No external docs to drift out of sync. Read the header, parse the rows.
 
-### System → AI: one-way by design
+- **System → AI is the primary direction.** LLMs cannot reliably generate positionally correct arrays (0% correct ordering at ≤3.8B). For the reverse direction, LLMs output key-value pairs and a system-side [Output Controller](./schema-driven-encoder) places values into schema-ordered positions. This enables AI → AI communication via a gateway:
 
-DCP is primarily a **system → AI** delivery format. AI output remains natural language; the system side parses and converts. This is a deliberate constraint — current LLMs cannot reliably generate positionally correct arrays (verified: 0% correct field ordering across all tested models ≤3.8B). DCP optimizes the input channel, not the output.
+  ```
+  Agent A → {key: value, ...} → Gateway (OutputController) → DCP → Agent B
+  ```
 
-### Position is meaning
-
-In DCP, the position of a value within an array determines its semantics. This is identical to how CSV works, and how function arguments work in every programming language. It's the oldest data convention in computing, applied to structured data delivery for AI.
-
-### Inline schema eliminates drift
-
-The schema travels with the data. There's no separate documentation to fall out of sync, no version negotiation, no "which schema does this payload use?" question. Read the header, parse the data. One step.
+- **Normalize values for token cost.** LLM tokenizers treat `0.36` (2 tokens) differently from `92` (1 token). Use the simplest representation: integers 0-100 over floats 0.00-1.00, seconds over milliseconds, `0`/`1` over `true`/`false`.
 
 ## Benchmark: DCP vs JSON vs Natural Language
 

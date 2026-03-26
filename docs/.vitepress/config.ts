@@ -17,29 +17,25 @@ export default defineConfig({
       { text: 'Research', link: '/research/format-comparison' },
     ],
 
-    sidebar: {
-      '/dcp/': [
-        {
-          text: 'Protocol',
-          items: [
-            { text: 'Specification', link: '/dcp/specification' },
-            { text: 'Shadow Index', link: '/dcp/shadow-index' },
-            { text: 'Agent Profile', link: '/dcp/agent-profile' },
-            { text: 'Validation', link: '/dcp/validation' },
-          ]
-        }
-      ],
-      '/research/': [
-        {
-          text: 'Research',
-          items: [
-            { text: 'Format Comparison', link: '/research/format-comparison' },
-            { text: 'Lightweight LLM', link: '/research/lightweight-llm' },
-            { text: 'Density', link: '/research/density' },
-          ]
-        }
-      ]
-    },
+    sidebar: [
+      {
+        text: 'Protocol',
+        items: [
+          { text: 'Specification', link: '/dcp/specification' },
+          { text: 'Schema-Driven Encoder', link: '/dcp/schema-driven-encoder' },
+          { text: 'Shadow Index', link: '/dcp/shadow-index' },
+          { text: 'Agent Profile', link: '/dcp/agent-profile' },
+          { text: 'Validation', link: '/dcp/validation' },
+        ]
+      },
+      {
+        text: 'Research',
+        items: [
+          { text: 'Format Comparison', link: '/research/format-comparison' },
+          { text: 'Lightweight LLM & Density', link: '/research/lightweight-llm' },
+        ]
+      }
+    ],
 
     socialLinks: [
       { icon: 'github', link: 'https://github.com/hiatamaworkshop/dcp-docs' }

@@ -1,79 +1,140 @@
-# スキーマ駆動エンコーダ
+# Schema-Driven Encoder
 
-DCP の中心原理。エンコーダはハードコードしない — スキーマ定義がフィールド順序の唯一の真実 (single source of truth) であり、エンコーダはスキーマをロードして位置を解決するだけ。
+## Why Encoders Exist
 
-## スキーマがエンコーダを決定する
+DCP's primary direction is **system → AI**. LLMs cannot reliably produce positionally correct arrays ([verified at 0% for models ≤3.8B](/research/lightweight-llm)). The system must encode data into DCP before delivering it to the LLM.
 
-```
-スキーマ JSON → フィールド順序を読む → 任意のデータ → positional array
-
-schema("hotmemo:v1")       → fields: [layer, source, signal, detail]
-schema("knowledge:v1")     → fields: [action, domain, detail, confidence]
-schema("rag-chunk-meta:v1") → fields: [source, page, section, score, chunk_index]
-```
-
-エンコーダのコードにドメイン知識は不要。スキーマ JSON を 1 ファイル追加すれば、同じエンコーダが新しいデータ構造を扱える。
-
-## 3 つのエンコード経路
-
-DCP データを生成する経路は 3 つあり、それぞれ役割が異なる:
+This is where the encoder sits — at the boundary where structured data enters the LLM context window:
 
 ```
-1. システム側エンコーダ（スキーマ駆動）
-   内部データ → schema.fields で位置解決 → positional array
-   用途: hotmemo、receptor 出力、RAG メタデータなど
-   特徴: 正確。スキーマに従う限りエラーは発生しない。
+RAG pipeline example:
 
-2. LLM 出力（validator で教育）
-   LLM が native フィールドに直接 positional array を書く
-   用途: engram_push の native フィールド
-   特徴: 不安定。validator + passive education で精度を上げていく。
+  User query
+    → Vector search (Pinecone, Qdrant, ...)
+    → Reranker / filter / compressor
+    → [★ DCP Encoder ★]              ← here
+    → LLM context window
 
-3. パイプライン入口エンコーダ
-   NL メタデータ → encoder → positional array → LLM に渡す
-   用途: RAG パイプライン、ログ→LLM、API 応答→LLM
-   特徴: 1 回だけ。ルールベース変換（LLM 不要）。
+  Before encoder:
+    { "source": "docs/auth.md", "page": 12, "section": "JWT Config", "score": 0.92 }
+    { "source": "docs/api.md", "page": 5, "section": "Rate Limiting", "score": 0.87 }
+
+  After encoder:
+    ["$S","rag-chunk-meta:v1",4,"source","page","section","score"]
+    ["docs/auth.md",12,"JWT Config",0.92]
+    ["docs/api.md",5,"Rate Limiting",0.87]
 ```
 
-経路 1 と 3 は本質的に同じ — **スキーマからフィールドマッピングを読み、位置に変換する**。違いはデータの出所だけ（内部状態 vs 外部入力）。
+The encoder strips keys, applies positional ordering, generates the `$S` header, and optionally groups repeated values with `$G`. Upstream stages (search, rerank, filter) continue to work with the original data — DCP is applied only at the LLM boundary.
 
-## なぜスキーマ駆動が正解か
-
-```
-ハードコード方式:
-  rows.push(["quality", "push", flag, detail])       // hotmemo 固有のコード
-  rows.push(["receptor", "passive", signal, detail])  // receptor 固有のコード
-  → スキーマのフィールド順を変えたら → 全コードを手で修正
-  → 新スキーマを追加するたびに → 専用フォーマット関数を書く
-
-スキーマ駆動方式:
-  encoder = DcpEncoder(schema.load("hotmemo:v1"), mapping)
-  encoder.encode(data)  // → スキーマが変われば出力も変わる
-  → スキーマ変更 → JSON ファイル 1 つ修正、コード変更なし
-  → 新スキーマ → JSON ファイル 1 つ追加、コード変更なし
-```
-
-スキーマがコードの外にある限り、エンコーダは汎用のまま保てる。**新しいデータ型の追加がプログラミングタスクではなく設定タスクになる。**
-
-## encoder ではなく validator（LLM 出力の話）
-
-スキーマ駆動エンコーダは**システムが内部データを DCP に変換する**話。LLM の出力については逆のアプローチを取る。
+This pattern applies beyond RAG:
 
 ```
-✗ LLM の出力を受けてシステムが encoder で DCP に変換する
-  → LLM は自然言語を出し続ける。成長しない。
-  → マルチエージェント時代に通用しない（engram 以外の通信先に encoder はない）
-
-✓ LLM 自身が DCP で出力し、システムは validator で準拠チェックする
-  → phi-agent パターン: 出力モードを制限することで精度向上
-  → LLM が DCP を話せるようになる。engram が教育の場。
+Logs → LLM:     log entries  → encoder → positional arrays → LLM analysis
+API → LLM:      HTTP metrics → encoder → positional arrays → LLM monitoring
+Internal → LLM: system state → encoder → positional arrays → LLM reasoning
 ```
 
-LLM 出力を変換する常駐 encoder は DCP の思想に反する。**翻訳コスト削減のために翻訳コストを払う** 矛盾。
+Any structured data entering an LLM context window benefits from encoding.
 
-## 実装状況
+## Schema Drives the Encoder
 
-| 実装 | 言語 | 状態 |
-|---|---|---|
-| dcp-rag | Python | `DcpSchema` + `FieldMapping` + `DcpEncoder` — 汎用エンコーダ実装済み |
-| engram | TypeScript | スキーマ定義あり (`gateway/schemas/`)、エンコーダはハードコード。TS 汎用エンコーダは未実装 |
+The central principle: **the schema defines field order, the encoder reads it**. No domain knowledge in the encoder code.
+
+```
+Schema JSON → field order → encoder resolves positions → positional array
+
+schema("rag-chunk-meta:v1") → [source, page, section, score, chunk_index]
+schema("log-entry:v1")      → [level, service, timestamp, error_code]
+schema("api-response:v1")   → [endpoint, method, status, latency_ms]
+```
+
+Add a new data type = add a JSON file. No code changes.
+
+```
+Hardcoded:
+  rows.push(["error", "auth", 1711284600, "E_TIMEOUT"])   // log-specific code
+  → change field order = modify all code
+  → new schema = write new formatter
+
+Schema-driven:
+  encoder = DcpEncoder(schema.load("log-entry:v1"), mapping)
+  encoder.encode(data)
+  → change field order = edit JSON file
+  → new schema = add JSON file
+```
+
+**New data types become configuration, not programming.**
+
+---
+
+::: info Implementation Helpers
+The sections below describe helper utilities that implement DCP concepts as callable tools. These are not part of the DCP specification — they are reference implementations distributed as part of the DCP package ([dcp-rag](https://github.com/hiatamaworkshop/dcp-rag)).
+:::
+
+## Schema Generation
+
+Schemas have conventions — field ordering (identifiers first, then classifiers, then numerics, then text), type inference, enum detection, naming rules. A schema generator embeds these conventions so that any caller gets a compliant schema:
+
+```
+Data samples → SchemaGenerator → DcpSchema + FieldMapping (draft)
+                                  → review / adjust
+                                  → confirmed schema → encoder auto-generated
+```
+
+The generator infers:
+- **Field types** from observed values (string, number, null unions)
+- **Enums** from low-cardinality string fields
+- **Numeric ranges** (0-1 scores, non-negative counts)
+- **Field order** following DCP convention
+- **Group key candidates** from high-repetition fields
+- **Mapping paths** via auto-binding (same-name fields need no manual mapping)
+
+## Shadow Level Support
+
+The encoder accepts a `shadow_level` parameter that controls header density. The encoder does not decide the level — the [Gateway](./shadow-index) decides based on the consuming agent's observed capability.
+
+| Level | Header Output | Use Case |
+|-------|--------------|----------|
+| **L0** | `["source","page","section","score"]` | Lightweight agents, single schema |
+| **L1** | `["$S","rag:v1","source","page","section","score"]` | Multi-schema disambiguation |
+| **L2** | `["$S","rag:v1",4,"source","page","section","score"]` | Full protocol (default) |
+| **L3** | `{"$dcp":"schema","id":"rag:v1","fields":[...],"types":{...}}` | First contact, education |
+| **L4** | `source: docs/auth.md, page: 12, score: 0.92` | NL fallback, last resort |
+
+Data rows are identical across L0–L3 (positional arrays). Only L4 switches to key-value text.
+
+## Output Controller — AI → System Direction
+
+LLMs can't produce positional arrays, but sometimes need to output structured DCP data (e.g., writing knowledge entries). The Output Controller solves this by separating **meaning determination** (LLM) from **structural placement** (system):
+
+```
+LLM outputs key-value:
+  { "action": "replace", "domain": "auth", "detail": "jwt migration", "confidence": 0.9 }
+
+OutputController places by schema order:
+  ["replace", "auth", "jwt migration", 0.9]
+```
+
+The controller does no semantic inference — if the LLM says `action="replace"`, it goes in the position the schema defines. Extra keys are ignored, missing keys become null, values are validated against schema types.
+
+This is the DCP equivalent of a form for humans: the LLM fills in fields, the system enforces structure. It enables AI → AI communication via a [Gateway](./shadow-index):
+
+```
+Agent A → {key: value} → Gateway (OutputController) → DCP → Agent B
+```
+
+## Gateway Architecture
+
+The Gateway holds the schema registry, encoder, controller, and agent profiles together:
+
+```
+Gateway
+  ├── SchemaRegistry          — all schema definitions (single source of truth)
+  ├── AgentProfile            — per-agent error rate, shadow level
+  ├── Encoder                 — schema-driven, receives shadow_level as argument
+  ├── OutputController        — places LLM key-value output into positional arrays
+  └── Validator               — checks LLM output against schema, feeds back to profile
+```
+
+The schema is the dictionary. The gateway is the librarian — it looks at who's asking and decides which page to open.

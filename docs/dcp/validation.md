@@ -22,6 +22,5 @@ DCP validation follows the passive education principle:
 1. **Never reject data** — accept everything, even non-compliant input
 2. **Warn on violation** — attach expanded schema hint to response
 3. **Cost gradient as incentive** — compliant data is cheaper to process
-4. **Schema hash for cache** — `$S:id#hash` enables consumers to skip re-parsing known schemas
 
 The system does not enforce compliance. It makes compliance cheaper than non-compliance.
