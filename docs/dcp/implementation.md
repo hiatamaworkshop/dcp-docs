@@ -37,79 +37,20 @@ Data rows are identical across L0–L3 (positional arrays). Only L4 switches to 
 
 ## Native Operations
 
-::: warning Future Direction
-Native operations describe where DCP's positional structure naturally leads — processing data in the same format it's delivered. This is a design exploration, not a current specification. Implementation depends on multi-agent pipeline maturity.
+::: tip Design Note
+This is not a specification — it's an observation about what DCP's structure makes possible.
 :::
 
-DCP's positional arrays are already a complete data representation. Every operation that structured data supports — filtering, projection, sorting, aggregation, joining — can be performed directly on positional arrays without decoding.
+DCP's positional arrays don't need to be decoded into JSON objects for processing. Position is already meaning — filtering, projection, and routing work directly on array indices. The standard relational operations (filter, project, sort, join, aggregate) apply naturally.
 
 ```
-Conventional:  DCP stream → decode to JSON → process → encode to DCP → deliver
-Native:        DCP stream → process (position-based) → deliver
+["$S","api-response:v1","endpoint","method","status","latency_ms"]
+["/v1/users","GET",200,42]
+["/v1/orders","POST",201,187]
+["/v1/auth","POST",500,95]
+
+Position 2 is "status". Filter by .[2] >= 400 → ["/v1/auth","POST",500,95]
+Project positions 0,3 → ["$S","api-response:v1","endpoint","latency_ms"] + ["/v1/users",42] ...
 ```
 
-### Primitive Operations
-
-Seven operations cover the relational algebra on positional arrays. Each operates on DCP streams and produces DCP streams.
-
-**filter** — Select rows by positional condition. Schema unchanged.
-
-```
-filter(.[2] >= 400):
-  ["$S","api-response:v1","endpoint","method","status","latency_ms"]
-  ["/v1/auth","POST",500,95]
-```
-
-**project** — Select a subset of positions. `$S` header rewritten.
-
-```
-project(0, 3):
-  ["$S","api-response:v1","endpoint","latency_ms"]
-  ["/v1/users",42]
-```
-
-**sort** — Reorder rows by position. Schema unchanged.
-
-**agg** — Group by position, apply aggregates. Produces a new schema.
-
-```
-group_by(.[1]).agg(count, avg(.[3])):
-  ["$S","api-response-agg:v1","method","count","avg_latency_ms"]
-  ["GET",2,177]
-```
-
-**join** — Combine two DCP streams by matching positions. Merged schema.
-
-```
-join(A.[0] == B.[0]):
-  ["$S","api-response-owned:v1","endpoint","method","status","latency_ms","team"]
-  ["/v1/users","GET",200,42,"platform"]
-```
-
-**reshape** — Map positions from one schema to another. Explicit position-to-position mapping.
-
-**split** — Partition a stream into multiple outputs by condition. Routing primitive for distributing subsets to child agents at appropriate shadow levels.
-
-### Composition
-
-Primitives compose into pipelines. Each operation takes DCP in and produces DCP out.
-
-```
-input
-  | filter(.[2] >= 400)
-  | project(0, 2, 3)
-  | sort(.[2] desc)
-  | split(.[2] > 500 → critical, _ → warning)
-```
-
-| Operation | Schema Effect |
-|-----------|--------------|
-| **filter** | Unchanged |
-| **project** | Field subset |
-| **sort** | Unchanged |
-| **agg** | New schema (derived) |
-| **join** | Merged schema |
-| **reshape** | Target schema |
-| **split** | Unchanged (per branch) |
-
-The `$S` header is rewritten at each stage. Schema identity is always current. Every operation takes DCP and returns DCP — closed under composition, no intermediate format.
+The decode/encode round-trip that key-value formats require is unnecessary when the processor understands positional schemas. This matters when DCP data passes through multiple processing stages — each stage operates on the same representation, closed under composition.
