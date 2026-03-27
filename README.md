@@ -10,6 +10,7 @@ Compact structured data delivery for AI agents. Positional arrays, schema regist
 - [Schema-Driven Encoder](docs/dcp/schema-driven-encoder.md) — System→AI encoding, schema generation, output controller
 - [Shadow Index](docs/dcp/shadow-index.md) — 5-level density spectrum (L0–L4), adaptive selection
 - [Agent Profile](docs/dcp/agent-profile.md) — Per-agent error rate observation, density adjustment
+- [Native Operations](docs/dcp/native-ops.md) — DCP as a processing format, primitive operations for brain AIs
 - [Validation](docs/dcp/validation.md) — Passive education, cost gradient incentives
 
 ## Research

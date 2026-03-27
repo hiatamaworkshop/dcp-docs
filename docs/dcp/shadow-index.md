@@ -31,34 +31,36 @@ This insight produces a 5-level spectrum:
 
 | Level | Name | What's Included | Example | Cost |
 |-------|------|----------------|---------|------|
-| **L0** | Fields Only | Field names + data | `["source","page","section","score"]` | ~10 tokens |
-| **L1** | With Schema ID | `$S` + ID + field names | `["$S","rag:v1","source","page","section","score"]` | ~15 tokens |
-| **L2** | Full Protocol | `$S` + ID + count + fields | `["$S","rag:v1",4,"source","page","section","score"]` | ~20 tokens |
+| **L0** | Fields Only | Field names only | `["source","page","section","score"]` | ~10 tokens |
+| **L1** | Schema ID | `$S` + ID only | `["$S","rag:v1"]` | ~5 tokens |
+| **L2** | Schema ID + Fields | `$S` + ID + field names | `["$S","rag:v1","source","page","section","score"]` | ~15 tokens |
 | **L3** | Full Schema | Complete schema definition | `{"$dcp":"schema","id":"rag:v1","fields":[...],"types":{...}}` | ~80+ tokens |
 | **L4** | NL Fallback | Natural language key-value | `source: docs/auth.md, page: 12, section: JWT Config` | Unlimited |
 
 L0–L3 all use positional arrays for data rows. Only L4 switches to key-value text.
 
+### When to use which level
+
+| Situation | Level | Why |
+|-----------|:-----:|-----|
+| First contact (any model) | L3 | Agent needs full schema definition to begin |
+| After first contact, multi-schema | L1 | Schema ID alone is enough to switch — the standard operating mode |
+| After first contact, multi-schema (polite) | L2 | Schema ID + field names as a reminder |
+| Single schema, high-capability | L1 | Schema already internalized, ID is a formality |
+| Lightweight model (≤4B) | L0 | Can only interpret field names; protocol markers are noise |
+| Non-DCP consumer / human debugging | L4 | NL key-value fallback |
+
+After first contact, **L1 (`$S` + schema ID) is the default for capable agents**. The agent has seen the schema; the ID is all it needs to switch context. L2 adds field names as a courtesy. L0 exists for lightweight models that cannot parse protocol markers.
+
 ## Shadow Level Selection
 
 Shadow level selection has two modes:
 
-**Adaptive (agent-profiled):** The [Gateway](./schema-driven-encoder) observes per-agent DCP compliance and adjusts density automatically. High accuracy → less overhead, low accuracy → more hints. See [Agent Profile](./agent-profile) for the feedback loop.
-
 **Fixed (system-designer's choice):** The system designer sets a static policy — e.g., "always L2", "L0 with full schema every 10th interaction", "L3 on first contact, then L1". This mode exists for predictability: when the designer knows the consumer's capability or wants to guarantee schema visibility at a fixed cadence.
 
+**Adaptive (agent-profiled):** The system observes per-agent DCP compliance and adjusts density automatically. High accuracy → less overhead, low accuracy → more hints. See [Agent Profile](./agent-profile) for the feedback loop.
+
 Both modes use the same encoder — it receives `shadow_level` as an argument and formats accordingly. The encoder never decides density.
-
-### Decision Logic
-
-| Agent State | Shadow Level | Rationale |
-|-------------|:----------:|-----------|
-| New agent, never seen | L3 | Full schema for first contact |
-| Seen schema, low accuracy | L2 | Protocol structure may help parsing |
-| Moderate accuracy | L1 | Schema ID for multi-schema disambiguation |
-| High accuracy, single schema | L0 | Fields only — minimum overhead |
-| High accuracy, multi-schema | L2 | Needs schema ID + field count for switching |
-| Non-DCP consumer | L4 | NL fallback, last resort |
 
 ### Empirical Basis
 
@@ -93,48 +95,49 @@ See [Research: Lightweight LLM Compatibility](/research/lightweight-llm) for ful
 
 ## Output Direction — Shadow Index as Controller
 
+::: tip When to use
+The output controller is **optional**. It applies only when the system needs structured output — classification, scoring, metadata tagging. For reasoning, analysis, and explanation, natural language output is correct. LLMs excel at LLM → human communication; constraining that expressiveness is a design error, not an optimization.
+:::
+
 The shadow index applies in the output direction with no additional mechanism. When the system needs structured output from an AI, it re-presents a shadow index as a response constraint:
 
 ```
-Input:   Shadow(Schema A) → AI reads data
-Output:  Shadow(Schema A or B) → AI responds within constraint → Cap clamps deviations
+Input Shadow   →   AI   →   Output Shadow (= Controller)   →   Cap
+ (Schema A)              (Schema A or B, re-presented)     (safety net)
 ```
 
-**Same schema**: The input shadow is already in context. Re-presenting it as "respond in this format" costs ≈ 0 additional tokens.
+1. **Input**: System delivers data via shadow index. AI reads it without awareness of DCP mechanics.
+2. **Output constraint**: System re-presents a shadow index — the same schema or a different one — as a response format. "Answer using these fields, in these ranges."
+3. **Cap**: Any output that still deviates is clamped — enum values outside the defined set are rejected, numbers outside range are clipped, missing fields become null.
 
-**Different schema**: A new shadow index (Schema B) is presented as the output format. Cost = one shadow presentation — the same cost as any input delivery.
+### Cost
 
-The system needs no "output controller" as a separate component. The shadow index handles both directions. Residual deviations (wrong enum value, out-of-range number, free-text instead of array) are caught by a **cap** — a simple validator that clamps values to schema constraints. See [Schema-Driven Encoder: Output Controller](./schema-driven-encoder#output-controller-shadow-index-as-output-constraint) for implementation details.
+- **Same schema for input and output**: Re-present the input shadow. Additional cost ≈ 0 (already in context).
+- **Different schema for input and output**: Present Schema B's shadow index as the output constraint. Cost = one shadow index presentation.
 
-This unification is a direct consequence of DCP's constraint-first design. Free-form protocols (JSON, NL) require separate mechanisms for input formatting, output parsing, validation, and error handling. DCP's positional schema defines the constraint space once — input and output are just two directions through the same constraint.
+### Why This Works
 
-## From Delivery Mode to Task Access Level
+DCP schemas already define the constraint space:
 
-The shadow index was designed to optimize data delivery cost. But the data it collects — per-agent schema comprehension accuracy — turns out to measure something more general.
+- `enum` fields → selection from fixed choices
+- Numeric ranges (`weight: 0-1`) → bounded judgment
+- Field definitions → what to answer, not just how
 
-Shadow level approximates cognitive level approximates task aptitude:
+When the AI sees `["action(enum:add|replace|remove)", "domain", "detail", "confidence:0-1"]` as an output format, its judgment space is structurally limited. The AI decides *which* action and *what* confidence — the schema prevents it from inventing fields or producing unbounded values.
 
-- An agent that processes L0 DCP reliably → capable of complex structured tasks
-- An agent that requires L3 or L4 → should receive simpler, well-guided tasks
+```
+Prompt:  "Evaluate this change. Respond as: [action(add|replace|remove), domain, detail, confidence:0-1]"
 
-DCP compliance rate is a **necessary condition** for task capability, not a sufficient one. An agent that can't read DCP can't handle complex structured tasks — but reading DCP doesn't guarantee task competence. Task-specific performance must be observed separately and combined with DCP compliance for allocation decisions.
+AI output:  ["replace", "auth", "jwt migration to RS256", 0.85]
+            ↓
+Cap:        action ∈ {add,replace,remove} ✓, confidence ∈ 0-1 ✓ → pass through
 
-### Task Pooling
+AI output:  "I think we should replace the auth module because..."
+            ↓
+Cap:        not array → parse key-value → place by schema order → clamp values
+```
 
-In a multi-agent system, tasks can be pooled by required access level:
+The cap handles the residual — it does not drive the design. Most outputs from capable models will already conform because the constraint was presented upfront.
 
-| Queue | Required Level | Task Type |
-|-------|:-------------:|-----------|
-| **L0 pool** | High competence | Complex multi-step reasoning, cross-domain synthesis |
-| **L1 pool** | Moderate competence | Structured extraction, template-following |
-| **L2 pool** | Basic competence | Simple lookup, classification, single-field tasks |
+There is nothing in the system beyond schema definitions, shadow indexes, and caps. "Controller" is not a component — it is a usage pattern of the shadow index.
 
-Task management is primarily mathematical — scoring and thresholds. The brain AI's role is child-agent communication and dialogue, not task queue management. Task pooling auto-manages via EMA + thresholds; brain AI supports only boundary cases.
-
-### Design Principles
-
-- **Single metric, dual value** — DCP compliance rate drives both format selection and task allocation
-- **Automatic promotion/demotion** — the math is solvable, no human judgment needed
-- **Management cost ≈ zero** — agent capability assessment is a side effect of normal data delivery
-- **No self-report** — capability is observed, not declared
-- **Field names are the universal base** — everything else is optional infrastructure

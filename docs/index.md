@@ -23,6 +23,9 @@ features:
   - title: Schema-Driven Encoder
     details: Schema as single source of truth. Load a schema, get an encoder. No domain knowledge in code — new data types are config, not programming.
     link: /dcp/schema-driven-encoder
+  - title: Native Operations
+    details: DCP as a processing format. Seven primitives — filter, project, sort, agg, join, reshape, split — for brain AIs that operate on positional arrays without decoding.
+    link: /dcp/native-ops
   - title: Agent Profile Adaptation
     details: Observe per-agent error rates, adjust hint density automatically. TCP slow-start for data formats.
     link: /dcp/agent-profile

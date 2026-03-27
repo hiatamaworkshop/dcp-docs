@@ -1,6 +1,10 @@
 # Lightweight LLM Compatibility & Density
 
-DCP is viable as a system→AI data format even for sub-4B models. Read comprehension works. Generation does not. No single density level works for all models — adaptive selection is justified.
+::: info Context
+DCP is designed for frontier models (Claude, GPT class). These tests push DCP to its limits with **extremely small models (0.5B–3.8B)** — far below typical production use — to find the floor of compatibility. For reference, these models are roughly 100x smaller than frontier models and struggle with basic reasoning tasks regardless of data format.
+:::
+
+DCP is viable as a system→AI data format even for sub-4B models. Read comprehension works. Unprompted generation of correct positional arrays does not — but constrained output via [controller pattern](../dcp/shadow-index#output-direction-shadow-index-as-controller) (schema-guided prompting) is expected to improve this significantly, pending further testing.
 
 ## Test Environment
 
@@ -30,7 +34,7 @@ All models can read DCP data. Failure patterns are task-type-specific, not DCP-s
 | llama3.2:1b | 0/3 | **0/3** | 0/3 |
 | qwen2.5:0.5b | 3/3 | **0/3** | 0/3 |
 
-**correct_order = 0/3 across all models.** LLMs produce valid JSON but cannot maintain positional field ordering. System-side [encoder](../dcp/schema-driven-encoder) is essential for system → AI. For AI → system, the [Output Controller](../dcp/schema-driven-encoder#output-controller-ai-→-system-direction) places LLM key-value output into schema-ordered positions.
+**correct_order = 0/3 across all models** when generating without schema constraint. LLMs produce valid JSON but cannot spontaneously maintain positional field ordering. Note: this tested unprompted generation only — the [controller pattern](../dcp/shadow-index#output-direction-shadow-index-as-controller) (presenting schema as output constraint) was not tested and may yield better results.
 
 ## NL vs DCP Accuracy
 
@@ -85,7 +89,7 @@ The density results led to a further question: what if we strip all protocol inf
 
 1. **DCP works for consumption at ≤3.8B.** Token savings come at no accuracy cost.
 
-2. **DCP generation is impossible at this size.** System-side [encoder](../dcp/schema-driven-encoder) is essential.
+2. **Unprompted DCP generation fails at this size.** Schema-constrained generation (controller pattern) not yet tested.
 
 3. **Density adaptation is justified.** No single level works for all models. The [agent-profile system](../dcp/agent-profile) is the correct design.
 

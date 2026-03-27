@@ -12,6 +12,8 @@ LLMs produce and consume text at extraordinary cost. Every token matters — in 
 
 The question is simple: **if only machines read this data, why are we formatting it for humans?**
 
+The industry approaches this as a JSON optimization problem — stripping syntax overhead while preserving key-value structure. DCP asks a different question: **why have keys at all?** If the consumer knows the schema, every key is a wasted token.
+
 ## Core Idea
 
 Data Cost Protocol (DCP) is a convention for delivering structured data to AI agents. The rules:
@@ -57,7 +59,7 @@ A batch of API response metrics fed to an LLM for analysis:
 With DCP:
 
 ```
-["$S","api-response:v1",4,"endpoint","method","status","latency_ms"]
+["$S","api-response:v1","endpoint","method","status","latency_ms"]
 ["/v1/users","GET",200,42]
 ["/v1/orders","POST",201,187]
 ["/v1/auth","POST",200,95]
@@ -71,18 +73,17 @@ With DCP:
 DCP data in the wild uses a compact header to declare which schema governs the rows that follow:
 
 ```
-["$S", schema_id, field_count, ...field_names]
+["$S", schema_id, ...field_names]
 ```
 
 - `$S` — literal marker, signals "this is a schema declaration"
 - `schema_id` — identifies the schema (e.g., `"knowledge:v1"`, `"hotmemo:v1"`)
-- `field_count` — how many fields per data row
-- `field_names` — positional field names for human audit
+- `field_names` — positional field names
 
-Data rows follow immediately. The first element of each row is a record-type tag or is omitted if the schema has only one type.
+Data rows follow immediately:
 
 ```
-["$S","hotmemo:v1",4,"layer","source","signal","detail"]
+["$S","hotmemo:v1","layer","source","signal","detail"]
 ["quality","push","no-type-tag","auth jwt migration fix"]
 ["receptor","passive","suggest","engram_pull"]
 ```
@@ -94,9 +95,7 @@ When both producer and consumer already know the schema, the header can be **abb
 ["quality","push","no-type-tag","auth jwt migration fix"]
 ```
 
-The system selects verbosity by the consumer's capability and session state. The full header is for agents handling multiple schemas simultaneously; single-schema consumers need only the field names.
-
-For lightweight models (≤4B), field names alone produce the best comprehension — protocol markers are noise at this size. See [Shadow Index](./shadow-index) for the 5-level density spectrum and [Lightweight LLM results](/research/lightweight-llm) for test data.
+The full header is presented on first contact. After that, high-capability agents work from the abbreviated form; lightweight models (≤4B) can only interpret field names.
 
 ## Fixed-Length Principle
 
@@ -131,7 +130,7 @@ Schemas are centralized as JSON definitions in a registry. Each schema declares 
 }
 ```
 
-The registry serves as the single source of truth. Schemas are available via API (`GET /schemas`, `GET /schemas/:id`), embedded in tool descriptions, and referenced by hash for cache validation.
+The registry serves as the single source of truth. Schemas are available via API (`GET /schemas`, `GET /schemas/:id`) and embedded in tool descriptions.
 
 ## Design Properties
 
@@ -141,13 +140,17 @@ The registry serves as the single source of truth. Schemas are available via API
 
 - **Schema travels with data.** No external docs to drift out of sync. Read the header, parse the rows.
 
-- **System → AI is the primary direction.** LLMs cannot reliably generate positionally correct arrays (0% correct ordering at ≤3.8B). For the AI → system direction, the [shadow index](./shadow-index) is re-presented as an output constraint — the same schema that delivered the input now constrains the output. Deviations are [capped](./schema-driven-encoder#output-controller-shadow-index-as-output-constraint) as a safety net. No separate output mechanism exists.
+- **System → AI is the primary direction.** DCP optimizes the input channel. For structured output (when needed), the [shadow index](./shadow-index) can be re-presented as an output constraint — the AI responds within schema-defined ranges and choices. This is optional; most AI output is natural language and should remain so.
 
 - **Normalize values for token cost.** LLM tokenizers treat `0.36` (2 tokens) differently from `92` (1 token). Use the simplest representation: integers 0-100 over floats 0.00-1.00, seconds over milliseconds, `0`/`1` over `true`/`false`.
 
+## Can LLMs Read DCP?
+
+Yes. Format comparison testing (3 models × 4 tasks × 3 runs) shows DCP positional arrays match JSON accuracy at ≥2B parameters. When a model fails, it fails across all formats equally — format is not the bottleneck. See [Format Comparison](/research/format-comparison) for full data.
+
 ## Benchmark: DCP vs JSON vs Natural Language
 
-Claims need numbers. We ran a reproducible benchmark comparing the same data in three formats across data size, parse speed, and LLM token cost.
+Given that DCP is as readable as JSON, the remaining question is cost. We ran a reproducible benchmark comparing the same data in three formats across data size, parse speed, and LLM token cost.
 
 ### Data Size (10,000 records)
 
@@ -188,13 +191,5 @@ DCP and JSON parse with zero LLM cost — string operations only. Natural langua
 ```
 
 The most expensive thing about natural language as a data format isn't the bytes — it's that **parsing requires inference**.
-
-## Why This Matters
-
-The AI industry is approaching data exchange as a JSON optimization problem (TOON, compressed JSON variants). These strip syntax overhead — braces, quotes, colons — but preserve the key-value structure.
-
-DCP asks a different question: **why have keys at all?** If the consumer knows the schema, every key is a wasted token. For N records with K fields, JSON repeats K key names N times. DCP states them once.
-
-As AI agents consume more structured data — session state, knowledge graphs, behavioral signals, configuration — the volume of system-to-AI data delivery grows fast. Formatting that traffic for human readability is a cost no one will want to pay.
 
 > You minify JavaScript before deploying to production. Why wouldn't you minify data before sending it to an AI?
