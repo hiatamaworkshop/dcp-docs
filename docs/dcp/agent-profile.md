@@ -84,3 +84,31 @@ Routing every agent-to-agent exchange through a central gateway adds latency and
 **Brain-managed pattern**: A brain AI holds the schema context and interprets child agent outputs — reformatting, validating, and routing as part of its own reasoning. No separate gateway process; the brain *is* the gateway.
 
 Both patterns move schema intelligence to where the work happens. The central gateway remains valuable for schema registry, agent profiling, and cross-session persistence — but it is not required on every exchange.
+
+## Design Direction — Layered Access
+
+::: tip Concept
+This section describes where the profile, shadow index, and schema concepts converge. Not a specification — a direction.
+:::
+
+The agent profile currently controls **density** — how much schema information accompanies data. A natural extension is **field access** — which fields an agent receives at all.
+
+When a schema defines 8 fields but a worker agent only needs 3, the profile can declare that subset. The system automatically projects the stream before delivery. The agent sees only its relevant fields, at its appropriate density.
+
+```
+Schema: ["$S","task-log:v1","agent","action","target","result","cost","t"]
+
+Brain:   all fields, L1, full stream
+Worker:  [agent, action, target], L0, filtered to own history
+Auditor: [agent, result, cost], L2, aggregated
+```
+
+Three DCP components converge:
+
+- **Schema** — defines what flows (SSOT, single source of truth)
+- **Shadow Index** — controls density per consumer (transparent, behind the scenes)
+- **Agent Profile** — determines who sees what (density + field access + filter criteria)
+
+The assessment process observes agent capability, updates the profile, and the delivery pipeline adjusts automatically — shadow level selection, field projection, row filtering. From the agent's perspective, the right data simply arrives. The control layer is fully transparent.
+
+Pipeline design shifts from manual plumbing ("transform X for agent A, reshape Y for agent B") to **declaring profiles** — the routing derives from schema + profile.
