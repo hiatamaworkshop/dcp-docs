@@ -25,7 +25,6 @@ export default defineConfig({
           { text: 'Schema-Driven Encoder', link: '/dcp/schema-driven-encoder' },
           { text: 'Shadow Index', link: '/dcp/shadow-index' },
           { text: 'Agent Profile', link: '/dcp/agent-profile' },
-          { text: 'Validation', link: '/dcp/validation' },
           { text: 'Implementation Helpers', link: '/dcp/implementation' },
         ]
       },

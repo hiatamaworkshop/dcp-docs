@@ -1,143 +1,176 @@
-# Multi-Level Shadow Index
+# Shadow Index
 
-The shadow index is DCP's unified mechanism for both **input delivery** and **output constraint**. The same schema presentation that tells an AI "here's what this data means" also tells it "respond in this shape." This dual role is not a design coincidence — it is a consequence of DCP's constraint-first approach. Because DCP defines strict schema structure upfront, the same tool naturally applies in both directions.
-
-## Why Schema Management Matters
-
-DCP's [specification](./specification) states that a high-capability AI agent only needs to see the schema **once** — after that, bare positional arrays are sufficient. The schema becomes zero-cost overhead.
-
-But this raises a practical question: **how does the system know whether the consumer still remembers the schema?**
-
-- A frontier model (Opus, Sonnet) retains the mapping reliably within a session. Schema can be sent once and discarded.
-- A mid-range model may lose track after many intervening messages. It needs periodic reminders.
-- A lightweight model (≤4B) may fail to map positions correctly even with the schema present — it needs inline field hints or key-value fallback.
-
-The system cannot ask the agent "do you remember the schema?" — it must **observe and adapt**. This is what schema management solves: dynamically choosing how much schema information to attach to each data delivery, based on the consumer's demonstrated capability.
-
-## The 5-Level Density Spectrum
-
-Each element in the `$S` header serves a different audience:
-
-| Element | Purpose | Who needs it |
-|---------|---------|-------------|
-| `"$S"` | Protocol marker | System parsers only |
-| `"schema:v1"` | Schema identifier (versioned) | Multi-schema sessions |
-| `5` | Field count | Parsers only |
-| Field names | Data interpretation | **Everyone** |
-
-**Field names are the only element all consumers need.** Everything else is optional infrastructure for more capable agents.
-
-This insight produces a 5-level spectrum:
-
-| Level | Name | What's Included | Example | Cost |
-|-------|------|----------------|---------|------|
-| **L0** | Fields Only | Field names only | `["source","page","section","score"]` | ~10 tokens |
-| **L1** | Schema ID | `$S` + ID only | `["$S","rag:v1"]` | ~5 tokens |
-| **L2** | Schema ID + Fields | `$S` + ID + field names | `["$S","rag:v1","source","page","section","score"]` | ~15 tokens |
-| **L3** | Full Schema | Complete schema definition | `{"$dcp":"schema","id":"rag:v1","fields":[...],"types":{...}}` | ~80+ tokens |
-| **L4** | NL Fallback | Natural language key-value | `source: docs/auth.md, page: 12, section: JWT Config` | Unlimited |
-
-L0–L3 all use positional arrays for data rows. Only L4 switches to key-value text.
-
-### When to use which level
-
-| Situation | Level | Why |
-|-----------|:-----:|-----|
-| First contact (any model) | L3 | Agent needs full schema definition to begin |
-| After first contact, multi-schema | L1 | Schema ID alone is enough to switch — the standard operating mode |
-| After first contact, multi-schema (polite) | L2 | Schema ID + field names as a reminder |
-| Single schema, high-capability | L1 | Schema already internalized, ID is a formality |
-| Lightweight model (≤4B) | L0 | Can only interpret field names; protocol markers are noise |
-| Non-DCP consumer / human debugging | L4 | NL key-value fallback |
-
-After first contact, **L1 (`$S` + schema ID) is the default for capable agents**. The agent has seen the schema; the ID is all it needs to switch context. L2 adds field names as a courtesy. L0 exists for lightweight models that cannot parse protocol markers.
-
-## Shadow Level Selection
-
-Shadow level selection has two modes:
-
-**Fixed (system-designer's choice):** The system designer sets a static policy — e.g., "always L2", "L0 with full schema every 10th interaction", "L3 on first contact, then L1". This mode exists for predictability: when the designer knows the consumer's capability or wants to guarantee schema visibility at a fixed cadence.
-
-**Adaptive (agent-profiled):** The system observes per-agent DCP compliance and adjusts density automatically. High accuracy → less overhead, low accuracy → more hints. See [Agent Profile](./agent-profile) for the feedback loop.
-
-Both modes use the same encoder — it receives `shadow_level` as an argument and formats accordingly. The encoder never decides density.
-
-### Empirical Basis
-
-First, a critical baseline: **DCP positional arrays are as readable as JSON objects for LLMs.** Format comparison testing (same data, same questions, 3 formats) shows no accuracy difference:
-
-| Model | Task | NL | JSON | DCP |
-|-------|------|:-:|:-:|:-:|
-| phi3:mini | field_lookup | 3/3 | 3/3 | 3/3 |
-| phi3:mini | count_filter | 3/3 | 3/3 | 3/3 |
-| gemma2:2b | field_lookup | 3/3 | 3/3 | 3/3 |
-| llama3.2:1b | field_lookup | 3/3 | 3/3 | 3/3 |
-| llama3.2:1b | count_filter | 3/3 | 3/3 | 3/3 |
-
-When a model fails, it fails across all formats equally — format is not the bottleneck, model capability is. **DCP costs fewer tokens than JSON at no accuracy penalty.** See [Format Comparison](/research/format-comparison) for details.
-
-Given that DCP ≈ JSON in accuracy, the question becomes: which DCP density level works best? Shadow level testing (3 models × 3 tasks × 3 levels × 3 runs):
-
-| Model | L0 (fields only) | L2 (full $S) | L4 (NL) |
-|-------|:-----------:|:------------:|:-------:|
-| **phi3:mini (3.8B)** | **9/9** | 6/9 | 6/9 |
-| gemma2:2b | 3/9 | **6/9** | 3/9 |
-| llama3.2:1b | **6/9** | 3/9 | 6/9 |
-
-Key findings:
-
-- **L0 is optimal for most lightweight models.** Protocol information is noise at ≤4B.
-- **phi3:mini is the practical floor** — 9/9 on L0 across all task types.
-- **L4 (NL) offers no advantage over L0.** It is a fallback, not an optimization.
-- **Model-specific variance exists** — gemma2 prefers L2, others prefer L0.
-
-See [Research: Lightweight LLM Compatibility](/research/lightweight-llm) for full test data.
-
-## Output Direction — Shadow Index as Controller
-
-::: tip When to use
-The output controller is **optional**. It applies only when the system needs structured output — classification, scoring, metadata tagging. For reasoning, analysis, and explanation, natural language output is correct. LLMs excel at LLM → human communication; constraining that expressiveness is a design error, not an optimization.
-:::
-
-The shadow index applies in the output direction with no additional mechanism. When the system needs structured output from an AI, it re-presents a shadow index as a response constraint:
+DCP separates data from interpretation. The body — a positional array — carries no type, no field name, no schema. It is raw signal. All meaning lives in the **shadow**: metadata layered on top of the body, declaring how to read it.
 
 ```
-Input Shadow   →   AI   →   Output Shadow (= Controller)   →   Cap
- (Schema A)              (Schema A or B, re-presented)     (safety net)
+Body:    ["2026-03-29","ERROR","gateway","connection refused"]
+
+Shadow:  ["$S","log:v1",4,"ts","level","svc","msg"]
 ```
 
-1. **Input**: System delivers data via shadow index. AI reads it without awareness of DCP mechanics.
-2. **Output constraint**: System re-presents a shadow index — the same schema or a different one — as a response format. "Answer using these fields, in these ranges."
-3. **Cap**: Any output that still deviates is clamped — enum values outside the defined set are rejected, numbers outside range are clipped, missing fields become null.
+The body knows nothing about itself. The shadow gives it meaning. This separation was a side effect of token compression — stripping keys and using positional encoding. But it turns out to be a fundamental design property.
 
-### Cost
+## Data exists before interpretation
 
-- **Same schema for input and output**: Re-present the input shadow. Additional cost ≈ 0 (already in context).
-- **Different schema for input and output**: Present Schema B's shadow index as the output constraint. Cost = one shadow index presentation.
+Traditional data pipelines require schema before data flows. ETL demands: define the shape, then extract, then transform, then load. Schema is a precondition.
 
-### Why This Works
-
-DCP schemas already define the constraint space:
-
-- `enum` fields → selection from fixed choices
-- Numeric ranges (`weight: 0-1`) → bounded judgment
-- Field definitions → what to answer, not just how
-
-When the AI sees `["action(enum:add|replace|remove)", "domain", "detail", "confidence:0-1"]` as an output format, its judgment space is structurally limited. The AI decides *which* action and *what* confidence — the schema prevents it from inventing fields or producing unbounded values.
+DCP inverts this. Data flows first. Interpretation follows when needed — or never.
 
 ```
-Prompt:  "Evaluate this change. Respond as: [action(add|replace|remove), domain, detail, confidence:0-1]"
-
-AI output:  ["replace", "auth", "jwt migration to RS256", 0.85]
-            ↓
-Cap:        action ∈ {add,replace,remove} ✓, confidence ∈ 0-1 ✓ → pass through
-
-AI output:  "I think we should replace the auth module because..."
-            ↓
-Cap:        not array → parse key-value → place by schema order → clamp values
+Source (JSON API, database, logs, CSV, anything)
+  │
+  ├─ Extract fields into positional arrays
+  │   ["2026-03-29","ERROR","gateway","timeout"]
+  │   ["2026-03-29","WARN","auth","retry 3"]
+  │
+  │  At this point: transferable, storable, streamable.
+  │  No schema attached. No meaning declared. Just tuples.
+  │
+  ├─ Later: attach $S → LLM can interpret
+  ├─ Later: attach type mask → validation begins
+  ├─ Later: attach routing shadow → agents self-select
+  │
+  └─ Each shadow arrives when needed, not before
 ```
 
-The cap handles the residual — it does not drive the design. Most outputs from capable models will already conform because the constraint was presented upfront.
+**Data existence and data interpretation are asynchronous.** The positional array is structurally complete — transferable, storable — before anyone declares what it means.
 
-There is nothing in the system beyond schema definitions, shadow indexes, and caps. "Controller" is not a component — it is a usage pattern of the shadow index.
+This also means DCP rows from different sources can coexist in the same stream. A log row from PostgreSQL and a log row from nginx, both extracted to `[timestamp, level, source, message]`, are indistinguishable under the same `$S` header. The origin doesn't matter. The positional structure does.
 
+## Multiple shadows, one body
+
+The same body can wear different shadows depending on who reads it and why. Shadows are **additive and disposable** — attach one, some, or all. Remove any shadow and the body doesn't notice.
+
+### Semantic Shadow — meaning
+
+The `$S` header is the semantic shadow. It tells the consumer: "position 0 is timestamp, position 1 is severity level, ..." — the same information that JSON keys provide, declared once instead of per-record.
+
+```
+["$S","log:v1",4,"ts","level","svc","msg"]
+["2026-03-29","ERROR","gateway","timeout"]
+```
+
+This is the original DCP use case: token compression. The semantic shadow eliminates key repetition while preserving meaning. Existing data from any source can be partially extracted into positional arrays and given meaning through a semantic shadow after the fact.
+
+#### The 5-Level Density Spectrum
+
+How much semantic information accompanies data depends on the consumer:
+
+| Level | Name | What's Included | Cost |
+|-------|------|----------------|------|
+| **L0** | Fields Only | Field names only | ~10 tokens |
+| **L1** | Schema ID | `$S` + ID only | ~5 tokens |
+| **L2** | Schema ID + Fields | `$S` + ID + field names | ~15 tokens |
+| **L3** | Full Schema | Complete schema definition with types | ~80+ tokens |
+| **L4** | NL Fallback | Natural language key-value | Unlimited |
+
+After first contact, **L1 is the default for capable agents**. The agent has seen the schema; the ID is all it needs. L0 exists for lightweight models that cannot parse protocol markers — empirically optimal for models ≤4B parameters.
+
+Selection can be **fixed** (system-designer's choice) or **adaptive** (observed per-agent compliance). See [Agent Profile](./agent-profile) for the adaptive feedback loop.
+
+### Validation Shadow — verification
+
+A validation shadow defines what "correct" means for each position. It is not a type system imposed on data — it is a lens you choose to look through.
+
+```
+Shadow A: field count only
+  → 4 fields expected, row has 4 → pass
+
+Shadow B: type mask
+  → [iso8601, enum(ERROR|WARN|INFO), string, string]
+  → bitwise AND per field → pass/fail
+
+Shadow C: length constraint
+  → field 3 (msg): max 200 chars → strlen check
+
+Shadow D: range check
+  → field 4 (latency_ms): 0 ≤ n ≤ 30000 → integer comparison
+
+Shadow E: regex pattern
+  → field 0 (ts): matches ISO8601 pattern → pattern match
+```
+
+These are not layers of the same validation. They are **independent shadows** — attach one, some, or all. The body doesn't know or care which shadows are watching it.
+
+Because DCP rows are fixed-length and line-independent:
+- Field count check requires no parsing — delimiter counting
+- Type masks can be compiled to bit patterns for hardware-friendly comparison
+- Each row validates independently — a corrupted row doesn't invalidate neighbors
+- Validation cost is constant per row — 1M rows/sec is integer comparison, not tree walking
+
+Validation shadows are **portable** (ship a shadow definition to a new consumer), **composable** (stack what you need), and **disposable** (remove one, others keep working).
+
+The key difference from traditional type systems: removing a TypeScript interface causes a compilation error. Removing a Protobuf schema causes deserialization failure. Removing a DCP validation shadow causes nothing — the stream continues unvalidated. **Validation is an observation, not a property of the data.**
+
+### Routing Shadow — distribution control
+
+A routing shadow declares **who receives this data and under what conditions**. It is not system-side filtering logic — it is a shadow like any other: an independent metadata layer attached to the body, readable by the system, disposable when no longer needed.
+
+```
+Body:    ["2026-03-29","ERROR","gateway","timeout"]
+
+Semantic shadow:
+  ["$S","log:v1",4,"ts","level","svc","msg"]
+
+Routing shadow:
+  schema:   "log:v1"                    // schema compatibility required
+  minLevel: L1                          // agents below L1 are excluded
+  access:   ["ops", "sre"]              // group-level access control
+  filter:   { level: ["ERROR","WARN"] } // field-value conditions
+```
+
+The system reads the routing shadow and executes its conditions — it doesn't own the logic. The routing shadow declares; the system obeys. Change the shadow, change the distribution. Remove the shadow, data flows unrestricted.
+
+This means routing is:
+
+- **Declarative** — conditions are stated in the shadow, not coded in the system
+- **Composable** — schema constraint + capability level + group access + field filter, mix as needed
+- **Disposable** — remove the routing shadow and the body still exists, just unrouted
+
+Schema versioning (`v1` vs `v2`) naturally partitions groups. ProjectId + schemaId + access constraints together form the selection key that guides data to the right agents.
+
+See [Agent Profile](./agent-profile) for task pooling, adaptive capability assessment, and AI-to-AI communication patterns.
+
+### Other shadows
+
+The shadow concept extends to any metadata overlay:
+
+- **Statistical shadow** — distribution profiles per field for anomaly detection. Deviation from baseline triggers alerts.
+- **Output controller shadow** — re-present a schema as a response constraint. The same shadow that tells an AI "here's what this data means" also tells it "respond in this shape." See [Agent Profile — Layered Access](./agent-profile#design-direction-layered-access).
+- **Access control shadow** — field-level projection. A brain sees all 8 fields; a worker sees 3. Same body, different visibility.
+
+## AI as exception handler
+
+When validation shadows handle the normal case at machine speed, AI's role shifts:
+
+```
+Stream: 1M rows/sec
+  → validation shadow: 999,990 pass → discard or store silently
+  → 10 fail → route to AI for interpretation
+  → AI processes 10 rows, not 1,000,000
+```
+
+DCP validation shadows bypass LLM mediation entirely for the normal case. AI becomes the exception handler — invoked only when mathematical checks surface something the shadow can't resolve.
+
+This is the same pattern as engram's receptor: EMA smoothing and weight thresholds handle quality assessment mathematically. The LLM is reserved for what math can't do — interpreting meaning, judging context, explaining exceptions.
+
+**Math first. AI when math isn't enough.**
+
+## Schema Pre-Methods
+
+DCP schemas define four interaction verbs for multi-agent handshakes:
+
+| Method | Meaning | Example |
+|--------|---------|---------|
+| `$S?` | Schema query — "what schema is this?" | Parse unknown data |
+| `$S!` | Schema declaration — "I'm sending this schema" | Handshake |
+| `$SV` | Schema validation — "does this conform?" | Quality check |
+| `$S+` | Schema expansion — "give me the full definition" | Learning |
+
+These are infrastructure for future multi-agent handshakes, not yet actively triggered by current agents.
+
+## Why this design
+
+None of the shadow applications beyond token compression were designed upfront. The goal was: "send less tokens to the LLM." Stripping keys, using positional encoding, declaring schema once — all token optimization decisions.
+
+The result happened to produce a minimal data representation that is simultaneously compressible, validatable, routable, and layerable. **Removing everything unnecessary left only the essential structure — and essential structure is universally useful.**
