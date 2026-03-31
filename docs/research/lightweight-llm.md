@@ -95,6 +95,54 @@ The density results led to a further question: what if we strip all protocol inf
 
 4. **L0 (fields only) is the right default for lightweight agents.** Strip protocol overhead, keep field names.
 
-5. **phi3:mini (~3.8B) is the practical floor** for DCP consumption.
+5. **phi3:mini (~3.8B) is the practical floor** for DCP consumption (reading).
 
-6. **7B+ testing needed** for practical thresholds. Deferred pending hardware.
+6. **~17B is the threshold for reliable DCP generation.** Reading DCP works at ≤4B; writing/converting to positional arrays requires ~17B for full format compliance. See [Output Controller Format Comparison](#output-controller-format-comparison) below.
+
+---
+
+## Output Controller Format Comparison
+
+This section tests **DCP generation** (AI → DCP output), distinct from the reading tests above.
+
+### Setup
+
+- **Task:** convert structured data to `ctrl-report:v1` positional arrays via controller prompt
+- **Formats tested:** `$S` (positional array with header), `table` (markdown), `kv` (JSON key-value)
+- **Models:** phi3:mini (3.8B), qwen2.5:3b (3B), llama-3.1-8b (8B), llama-4-scout-17b (17B), Claude Haiku
+- **n:** 1, 5, 10 rows per run
+- **Date:** 2026-03-31
+
+### Compliance Rate (n=10)
+
+| Model | Size | $S | table | kv |
+|-------|------|----|-------|----|
+| phi3:mini | 3.8B | 0% | 90% | 80% |
+| qwen2.5:3b | 3B | 0% | 20% | 100% |
+| llama-3.1-8b | 8B | 0% | 0% | 100% |
+| llama-4-scout-17b | 17B | **100%** | **100%** | **100%** |
+| Claude Haiku | — | **100%** | **100%** | **100%** |
+
+### Failure Patterns
+
+- **$S format:** all sub-17B models fail. Field name row output as data (1-row offset), `None` instead of `null`, escaped JSON inside arrays
+- **table format:** `cost` field stringified as `"42"` instead of `42` — cell borders strip numeric type context. Improves with more rows as column headers act as persistent guide
+- **kv format:** most robust for sub-10B. Failures include null field omission, hallucinated string values, extra fields
+
+### Input Token Efficiency (n=10, Haiku)
+
+| Format | Input tokens |
+|--------|-------------|
+| $S | 264 |
+| table | 311 (+18%) |
+| kv | 317 (+20%) |
+
+table vs kv token difference is negligible (~2%) — format choice should be based on compliance rate, not token cost.
+
+### Conclusions
+
+1. **$S format requires ~17B+** for reliable generation. Below this, positional header confuses models.
+2. **kv is the safest format for sub-10B** — most stable compliance, explicit field mapping.
+3. **table improves with row count** — column headers act as persistent guide (phi3:mini: 0%→90% from n=1 to n=10).
+4. **At ~17B all formats are equivalent** — use $S for token efficiency.
+5. **Controller design validated:** model outputs key-value, system converts to positional array — correct approach for sub-17B deployments.
