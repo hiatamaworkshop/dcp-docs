@@ -112,6 +112,14 @@ DCP arrays are fixed-length by design. Every record in a schema has the same num
 
 The final field may optionally carry a free-form value (object, array, null). Interior fields stay positional. A well-designed schema rarely needs this.
 
+```
+["$S","api-event:v1","ts","endpoint","status","meta"]
+["2026-04-01T09:00:00Z","/v1/orders",201,{"user_id":"u_8821","region":"ap-1"}]
+["2026-04-01T09:00:01Z","/v1/auth",  401,{"reason":"token_expired","retry":false}]
+```
+
+Positions 0–2 are fixed and positionally addressable. Position 3 (`meta`) is free-form — its shape varies per record. The fixed fields remain cheap to process; the escape hatch absorbs the irregular remainder without breaking the schema contract.
+
 ## Schema Registry
 
 Schemas are centralized as JSON definitions in a registry. Each schema declares its fields, types, enums, and examples:
