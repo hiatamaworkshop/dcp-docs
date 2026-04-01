@@ -120,6 +120,22 @@ The final field may optionally carry a free-form value (object, array, null). In
 
 Positions 0–2 are fixed and positionally addressable. Position 3 (`meta`) is free-form — its shape varies per record. The fixed fields remain cheap to process; the escape hatch absorbs the irregular remainder without breaking the schema contract.
 
+### Nested arrays — `$N`
+
+When a field contains an array of structured objects, DCP uses the `$N` marker (Nested). The sub-schema is declared once in the schema definition; the output references it by ID.
+
+```
+["$S","order:v1","order_id","status","items"]
+["o001","shipped",["$N","order.items:v1",["A001",2],["B002",1]]]
+["o002","pending",["$N","order.items:v1",["C003",3]]]
+["o003","cancelled",["$N","order.items:v1"]]
+```
+
+`["$N", schema-id, row1, row2, ...]` — rows present  
+`["$N", schema-id]` — empty array, schema ID preserved for type information
+
+Interior fields stay positional. The sub-schema governs the nested rows the same way the parent schema governs the outer rows.
+
 ## Schema Registry
 
 Schemas are centralized as JSON definitions in a registry. Each schema declares its fields, types, enums, and examples:
