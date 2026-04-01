@@ -5,7 +5,7 @@ DCP separates data from interpretation. The body — a positional array — carr
 ```
 Body:    ["2026-03-29","ERROR","gateway","connection refused"]
 
-Shadow:  ["$S","log:v1",4,"ts","level","svc","msg"]
+Semantic Shadow:  ["$S","log:v1",4,"ts","level","svc","msg"]
 ```
 
 The body knows nothing about itself. The shadow gives it meaning. This separation was a side effect of token compression — stripping keys and using positional encoding. But it turns out to be a fundamental design property.
@@ -44,7 +44,7 @@ Source (JSON API, database, logs, CSV, anything)
 
 **Data existence and data interpretation are asynchronous.** The positional array is structurally complete — transferable, storable — before anyone declares what it means.
 
-This also means DCP rows from different sources can coexist in the same stream. A log row from PostgreSQL and a log row from nginx, both extracted to `[timestamp, level, source, message]`, are indistinguishable under the same `$S` header. The origin doesn't matter. The positional structure does.
+This also means DCP rows from different sources can coexist in the same stream.
 
 ## Multiple shadows, one body
 
@@ -173,8 +173,7 @@ Stream: 1M rows/sec
 ```
 
 DCP validation shadows bypass LLM mediation entirely for the normal case. AI becomes the exception handler — invoked only when mathematical checks surface something the shadow can't resolve.
-
-This is the same pattern as engram's receptor: EMA smoothing and weight thresholds handle quality assessment mathematically. The LLM is reserved for what math can't do — interpreting meaning, judging context, explaining exceptions.
+The LLM is reserved for what math can't do — interpreting meaning, judging context, explaining exceptions.
 
 **Math first. AI when math isn't enough.**
 

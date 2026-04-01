@@ -77,7 +77,7 @@ Conditions for near-reversibility:
 - Vector components derived from numeric computation, not LLM output
 - Consumer references the same schema
 
-When these hold, the compressed form restores deterministically. This is the Active Bus lesson applied: the schema is the meaning-anchor. Without it, any numeric value is ungrounded.
+When these hold, the compressed form restores deterministically. the schema is the meaning-anchor. Without it, any numeric value is ungrounded.
 
 ## Derivation pipeline
 
@@ -94,14 +94,14 @@ Consumer (phi-agent or DCP-limited agent):
 
 See [Shadow — Stats ($ST)](./shadow-stats) for the derivation rules.
 
-## Phi-agent compatibility
+## LightWeight-Model compatibility
 
 Lightweight agents cannot parse full DCP protocol. `$O` is the natural delivery format:
 
 ```
 High-capability AI:  receives full DCP ($S/$V/$P shadows intact)
-Phi-agent (role A):  receives $O: reads bit0, bit1, bit4 only (role-defined)
-Phi-agent (role B):  receives $O: reads bit2, bit3 only
+agent (role A):  receives $O: reads bit0, bit1, bit4 only (role-defined)
+agent (role B):  receives $O: reads bit2, bit3 only
 DCP-limited agent:   receives $O: vector form only
 ```
 
@@ -109,7 +109,7 @@ No format branching in the stream. `$O` is the projection layer that makes one s
 
 ### Role as perceptual filter
 
-A phi-agent's role determines which bit dimensions it attends to:
+An agent's role determines which bit dimensions it attends to:
 
 ```
 role:security_monitor  → monitors bit0 (error_state), bit4 (confidence_low)
