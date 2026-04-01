@@ -10,6 +10,15 @@ Shadow:  ["$S","log:v1",4,"ts","level","svc","msg"]
 
 The body knows nothing about itself. The shadow gives it meaning. This separation was a side effect of token compression — stripping keys and using positional encoding. But it turns out to be a fundamental design property.
 
+| Shadow | Marker | Role |
+|--------|--------|------|
+| Semantic | `$S` | Declares field names and schema — gives meaning to positional arrays |
+| Validation | `$V` | Defines correctness per field — type masks, ranges, patterns |
+| Routing | `$R` | Distribution control — who receives data and under what conditions |
+| Permission | `$P` | Access control — who sees which fields |
+| Stats | `$ST` | Aggregated observation — pass rates, distributions, batch character |
+| Output | `$O` | Format adaptation — bit flags + vector for capability-limited consumers |
+
 ## Data exists before interpretation
 
 Traditional data pipelines require schema before data flows. ETL demands: define the shape, then extract, then transform, then load. Schema is a precondition.
@@ -41,7 +50,7 @@ This also means DCP rows from different sources can coexist in the same stream. 
 
 The same body can wear different shadows depending on who reads it and why. Shadows are **additive and disposable** — attach one, some, or all. Remove any shadow and the body doesn't notice.
 
-### Semantic Shadow — meaning
+### Semantic Shadow ($S) — meaning
 
 The `$S` header is the semantic shadow. It tells the consumer: "position 0 is timestamp, position 1 is severity level, ..." — the same information that JSON keys provide, declared once instead of per-record.
 
@@ -68,25 +77,24 @@ After first contact, **L1 is the default for capable agents**. The agent has see
 
 Selection can be **fixed** (system-designer's choice) or **adaptive** (observed per-agent compliance). See [Agent Profile](./agent-profile) for the adaptive feedback loop.
 
-### Validation Shadow — verification
+### Validation Shadow ($V) — verification
 
-A validation shadow defines what "correct" means for each position. It is not a type system imposed on data — it is a lens you choose to look through.
+A validation shadow `$V` defines what "correct" means for each position. It is not a type system imposed on data — it is a lens you choose to look through.
 
 ```
-Shadow A: field count only
+["$V","log:v1", "count:4"]
   → 4 fields expected, row has 4 → pass
 
-Shadow B: type mask
-  → [iso8601, enum(ERROR|WARN|INFO), string, string]
+["$V","log:v1", "type:[iso8601,enum(ERROR|WARN|INFO),string,string]"]
   → bitwise AND per field → pass/fail
 
-Shadow C: length constraint
+["$V","log:v1", "len:3:max200"]
   → field 3 (msg): max 200 chars → strlen check
 
-Shadow D: range check
+["$V","log:v1", "range:4:0:30000"]
   → field 4 (latency_ms): 0 ≤ n ≤ 30000 → integer comparison
 
-Shadow E: regex pattern
+["$V","log:v1", "pattern:0:iso8601"]
   → field 0 (ts): matches ISO8601 pattern → pattern match
 ```
 
@@ -102,21 +110,15 @@ Validation shadows are **portable** (ship a shadow definition to a new consumer)
 
 The key difference from traditional type systems: removing a TypeScript interface causes a compilation error. Removing a Protobuf schema causes deserialization failure. Removing a DCP validation shadow causes nothing — the stream continues unvalidated. **Validation is an observation, not a property of the data.**
 
-### Routing Shadow — distribution control
+### Routing Shadow ($R) — distribution control
 
-A routing shadow declares **who receives this data and under what conditions**. It is not system-side filtering logic — it is a shadow like any other: an independent metadata layer attached to the body, readable by the system, disposable when no longer needed.
+A routing shadow `$R` declares **who receives this data and under what conditions**. It is not system-side filtering logic — it is a shadow like any other: an independent metadata layer attached to the body, readable by the system, disposable when no longer needed.
 
 ```
-Body:    ["2026-03-29","ERROR","gateway","timeout"]
+["$S","log:v1",4,"ts","level","svc","msg"]
+["2026-03-29","ERROR","gateway","timeout"]
 
-Semantic shadow:
-  ["$S","log:v1",4,"ts","level","svc","msg"]
-
-Routing shadow:
-  schema:   "log:v1"                    // schema compatibility required
-  minLevel: L1                          // agents below L1 are excluded
-  access:   ["ops", "sre"]              // group-level access control
-  filter:   { level: ["ERROR","WARN"] } // field-value conditions
+["$R","log:v1", "minLevel:L1", "access:[ops,sre]", "filter:level:[ERROR,WARN]"]
 ```
 
 The system reads the routing shadow and executes its conditions — it doesn't own the logic. The routing shadow declares; the system obeys. Change the shadow, change the distribution. Remove the shadow, data flows unrestricted.
@@ -131,11 +133,31 @@ Schema versioning (`v1` vs `v2`) naturally partitions groups. ProjectId + schema
 
 See [Agent Profile](./agent-profile) for task pooling, adaptive capability assessment, and AI-to-AI communication patterns.
 
+### Stats Shadow ($ST) — observation
+
+`$ST` records aggregate observations per batch window: pass rates, field distributions, running counts. Where `$V` validates individual rows, `$ST` watches the stream over time.
+
+```
+["$ST","log:v1", 9990, 10, 1000, "ERROR"]
+```
+
+`$ST` feeds the output shadow derivation pipeline — batch character labels expressed as bit flags and component vectors. See [Shadow — Stats ($ST)](./shadow-stats).
+
+### Output Shadow ($O) — capability adaptation
+
+`$O` is the format adaptation layer. Distinct from `$P` (access control) — `$O` addresses capability, not permission.
+
+```
+["$O","receptor:v1", 0x0024, [0.7, 0.2, 0.0, 0.4]]
+                      ^flags  ^component vector
+```
+
+An agent that cannot parse DCP protocol receives `$O` instead. No format branching in the stream — `$O` makes one stream universally consumable. Bit flags + component vector carry the same semantic content as a full DCP array, at maximum compression density. Near-reversible when schema-grounded. See [Shadow — Output ($O)](./shadow-output).
+
 ### Other shadows
 
 The shadow concept extends to any metadata overlay:
 
-- **Statistical shadow** — distribution profiles per field for anomaly detection. Deviation from baseline triggers alerts.
 - **Output controller shadow** — re-present a schema as a response constraint. The same shadow that tells an AI "here's what this data means" also tells it "respond in this shape." See [Agent Profile — Layered Access](./agent-profile#design-direction-layered-access).
 - **Access control shadow** — field-level projection. A brain sees all 8 fields; a worker sees 3. Same body, different visibility.
 
@@ -156,18 +178,18 @@ This is the same pattern as engram's receptor: EMA smoothing and weight threshol
 
 **Math first. AI when math isn't enough.**
 
-## Schema Pre-Methods
+## Future — Schema Pre-Methods
 
-DCP schemas define four interaction verbs for multi-agent handshakes:
+> Not yet implemented. Infrastructure for multi-agent handshakes.
 
-| Method | Meaning | Example |
-|--------|---------|---------|
-| `$S?` | Schema query — "what schema is this?" | Parse unknown data |
-| `$S!` | Schema declaration — "I'm sending this schema" | Handshake |
-| `$SV` | Schema validation — "does this conform?" | Quality check |
-| `$S+` | Schema expansion — "give me the full definition" | Learning |
+Four interaction verbs for agent-to-agent schema negotiation:
 
-These are infrastructure for future multi-agent handshakes, not yet actively triggered by current agents.
+| Method | Meaning |
+|--------|---------|
+| `$S?` | Schema query — "what schema is this?" |
+| `$S!` | Schema declaration — "I'm sending this schema" |
+| `$SV` | Schema validation — "does this conform?" |
+| `$S+` | Schema expansion — "give me the full definition" |
 
 ## Why this design
 
