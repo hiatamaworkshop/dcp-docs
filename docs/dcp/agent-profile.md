@@ -45,12 +45,14 @@ Degrading trend (errorRate rising):
 
 ## Task Access Level
 
-The shadow level an agent **operates at** indicates its capability:
+The hint density level an agent **operates at** indicates its capability:
 
 - **L1 agent** (schema ID switching) → high capability, complex structured tasks
 - **L2 agent** (needs field name reminders) → moderate capability
 - **L0 agent** (field names only, no protocol) → lightweight model, simple tasks only
 - **L4 agent** (NL fallback) → minimal capability, guided tasks only
+
+For L0 agents, `$O` provides an additional adaptation layer: it selects the relevant field subset and reshapes the positional array into a form the model can reliably process. The shadow index selects density; `$O` handles the format transformation.
 
 DCP compliance rate is a **necessary condition** for task capability, not a sufficient one — but an agent that can't handle structured data shouldn't receive complex structured tasks.
 
@@ -91,24 +93,23 @@ Both patterns move schema intelligence to where the work happens. The central ga
 This section describes where the profile, shadow index, and schema concepts converge. Not a specification — a direction.
 :::
 
-The agent profile currently controls **density** — how much schema information accompanies data. A natural extension is **field access** — which fields an agent receives at all.
+The agent profile controls **density** — how much schema information accompanies data. But delivery to each agent involves three distinct concerns, handled by separate DCP layers:
 
-When a schema defines 8 fields but a worker agent only needs 3, the profile can declare that subset. The system automatically projects the stream before delivery. The agent sees only its relevant fields, at its appropriate density.
+- **Schema** — defines what exists (SSOT, single source of truth)
+- **`$P` (Permission Shadow)** — determines which fields each agent receives. A brain sees all 8 fields; a worker sees 3. Field projection is access control, not a formatting decision.
+- **`$O` (Output Shadow)** — determines the form of delivery. Selects a field subset and reshapes it for the consumer's capability level. Distinct from `$P`: `$O` addresses format, not permission.
+- **Shadow Index / Agent Profile** — selects schema hint density (L0–L4) per agent, based on observed compliance. Controls how much schema context travels with data, not which fields are visible.
 
 ```
 Schema: ["$S","task-log:v1","agent","action","target","result","cost","t"]
 
-Brain:   all fields, L1, full stream
-Worker:  [agent, action, target], L0, filtered to own history
-Auditor: [agent, result, cost], L2, aggregated
+Brain:   $P → all fields   | hint density L1
+Worker:  $P → [agent, action, target] | $O → L0 positional, filtered to own history
+Auditor: $P → [agent, result, cost]   | hint density L2, aggregated
 ```
 
-Three DCP components converge:
+Each layer has a single responsibility. They compose independently.
 
-- **Schema** — defines what flows (SSOT, single source of truth)
-- **Shadow Index** — controls density per consumer (transparent, behind the scenes)
-- **Agent Profile** — determines who sees what (density + field access + filter criteria)
+The assessment process observes agent capability, updates the profile, and the delivery pipeline adjusts automatically — shadow level selection, field projection via `$P`, format adaptation via `$O`. From the agent's perspective, the right data simply arrives. The control layer is fully transparent.
 
-The assessment process observes agent capability, updates the profile, and the delivery pipeline adjusts automatically — shadow level selection, field projection, row filtering. From the agent's perspective, the right data simply arrives. The control layer is fully transparent.
-
-Pipeline design shifts from manual plumbing ("transform X for agent A, reshape Y for agent B") to **declaring profiles** — the routing derives from schema + profile.
+Pipeline design shifts from manual plumbing ("transform X for agent A, reshape Y for agent B") to **declaring per-agent shadow configuration** — the routing, projection, and format derive from schema + shadow layers, not from custom code.
