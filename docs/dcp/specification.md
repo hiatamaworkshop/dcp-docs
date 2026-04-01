@@ -59,7 +59,7 @@ A batch of API response metrics fed to an LLM for analysis:
 With DCP:
 
 ```
-["$S","api-response:v1","endpoint","method","status","latency_ms"]
+["$S","api-response:v1",4,"endpoint","method","status","latency_ms"]
 ["/v1/users","GET",200,42]
 ["/v1/orders","POST",201,187]
 ["/v1/auth","POST",200,95]
@@ -78,6 +78,7 @@ DCP data in the wild uses a compact header to declare which schema governs the r
 
 - `$S` — literal marker, signals "this is a schema declaration"
 - `schema_id` — identifies the schema (e.g., `"knowledge:v1"`, `"hotmemo:v1"`)
+- `field_count` — number of fields (allows O(1) validation without counting names)
 - `field_names` — positional field names
 
 Data rows follow immediately:

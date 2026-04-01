@@ -21,9 +21,9 @@ The generator infers:
 - **Field order** following DCP convention
 - **Mapping paths** via auto-binding (same-name fields need no manual mapping)
 
-## Shadow Level Support
+## Header Density
 
-The encoder accepts a `shadow_level` parameter that controls header density. The encoder does not decide the level — the [shadow index](./shadow-index) decides based on the consuming agent's observed capability.
+The encoder accepts a `header_density` parameter (0–4) that controls how much schema context accompanies each batch. The encoder does not decide the level — the [shadow index](./shadow-index) decides based on the consuming agent's observed capability.
 
 | Level | Header Output | Use Case |
 |-------|--------------|----------|
@@ -54,3 +54,56 @@ Project positions 0,3 → ["$S","api-response:v1","endpoint","latency_ms"] + ["/
 ```
 
 The decode/encode round-trip that key-value formats require is unnecessary when the processor understands positional schemas. This matters when DCP data passes through multiple processing stages — each stage operates on the same representation, closed under composition.
+
+## Presets
+
+Presets provide pre-built `FieldMapping` configurations for common data sources. Available in the `dcp-py` package.
+
+### RAG / Vector DB
+
+Schema: `rag-chunk-meta:v1` — fields: `source`, `page`, `section`, `score`, `chunk_index`
+
+| Preset | Source |
+|--------|--------|
+| `pinecone` | Pinecone query results |
+| `qdrant` | Qdrant search results |
+| `weaviate` | Weaviate GraphQL results |
+| `chroma` | Chroma query results |
+| `milvus` | Milvus search results |
+
+```python
+from dcp_py.core.encoder import DcpEncoder
+encoder = DcpEncoder.from_preset("pinecone")
+```
+
+### Structured Logs
+
+Schema: `log-entry:v1` — fields: `ts`, `level`, `service`, `msg`
+
+| Preset | Source |
+|--------|--------|
+| `cloudwatch` | AWS CloudWatch log events |
+| `datadog` | Datadog log records |
+| `loki` | Grafana Loki log streams |
+| `generic` | Any flat log dict |
+
+```python
+from dcp_py.core.presets import get_log_preset
+mapping = get_log_preset("cloudwatch")
+```
+
+### SQL / DataFrames
+
+Schema: `sql-row-meta:v1` — fields: `db`, `table`, `row_num`, `query_ms`
+
+| Preset | Source |
+|--------|--------|
+| `psycopg2` | psycopg2 cursor rows |
+| `sqlalchemy` | SQLAlchemy result rows |
+| `sqlite3` | sqlite3 cursor rows |
+| `generic` | Any flat dict |
+
+```python
+from dcp_py.core.presets import get_sql_preset
+mapping = get_sql_preset("psycopg2")
+```
