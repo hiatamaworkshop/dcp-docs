@@ -211,19 +211,6 @@ The LLM is reserved for what math can't do — interpreting meaning, judging con
 
 **Math first. AI when math isn't enough.**
 
-## Future — Schema Pre-Methods
-
-> Not yet implemented. Infrastructure for multi-agent handshakes.
-
-Four interaction verbs for agent-to-agent schema negotiation:
-
-| Method | Meaning |
-|--------|---------|
-| `$S?` | Schema query — "what schema is this?" |
-| `$S!` | Schema declaration — "I'm sending this schema" |
-| `$SV` | Schema validation — "does this conform?" |
-| `$S+` | Schema expansion — "give me the full definition" |
-
 ## Why this design
 
 None of the shadow applications beyond token compression were designed upfront. The goal was: "send less tokens to the LLM." Stripping keys, using positional encoding, declaring schema once — all token optimization decisions.
