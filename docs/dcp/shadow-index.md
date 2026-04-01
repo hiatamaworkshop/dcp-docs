@@ -3,12 +3,14 @@
 DCP separates data from interpretation. The body — a positional array — carries no type, no field name, no schema. It is raw signal. All meaning lives in the **shadow**: metadata layered on top of the body, declaring how to read it.
 
 ```
-Body:    ["2026-03-29","ERROR","gateway","connection refused"]
+Body (Raw data):  ["2026-03-29","ERROR","gateway","connection refused"]
 
 Semantic Shadow:  ["$S","log:v1",4,"ts","level","svc","msg"]
 ```
 
 The body knows nothing about itself. The shadow gives it meaning. This separation was a side effect of token compression — stripping keys and using positional encoding. But it turns out to be a fundamental design property.
+
+This concept has since expanded. Shadows are now classified into six types, each with a single responsibility:
 
 | Shadow | Marker | Role |
 |--------|--------|------|
@@ -18,6 +20,25 @@ The body knows nothing about itself. The shadow gives it meaning. This separatio
 | Permission | `$P` | Access control — who sees which fields |
 | Stats | `$ST` | Aggregated observation — pass rates, distributions, batch character |
 | Output | `$O` | Format adaptation — bit flags + vector for capability-limited consumers |
+
+All shadows reference the same schema. The schema is the anchor — it defines what positions mean, and every shadow layer reads from that definition independently:
+
+```
+DCP stream
+├── body row:   ["2026-03-29","ERROR","gateway","timeout"]
+│
+└── schema: log:v1
+    ├── fields: [ts, level, svc, msg]
+    │
+    ├── $S   → "position 0 = ts, position 1 = level, ..."
+    ├── $V   → "position 0 must be iso8601, position 1 must be enum(ERROR|WARN|INFO)"
+    ├── $R   → "route to ops group if level = ERROR"
+    ├── $P   → "ops sees all 4 fields; workers see positions 2-3 only"
+    ├── $ST  → "pass_rate=0.997, dominant=ERROR, sample_n=1000"
+    └── $O   → "0x0024, [0.7, 0.2, 0.0, 0.4]"
+```
+
+Each shadow is independent. Attach one, some, or all — the body and schema are unchanged.
 
 ## Data exists before interpretation
 
@@ -143,16 +164,29 @@ See [Agent Profile](./agent-profile) for task pooling, adaptive capability asses
 
 `$ST` feeds the output shadow derivation pipeline — batch character labels expressed as bit flags and component vectors. See [Shadow — Stats ($ST)](./shadow-stats).
 
-### Output Shadow ($O) — capability adaptation
+### Output Shadow ($O) — format adaptation
 
-`$O` is the format adaptation layer. Distinct from `$P` (access control) — `$O` addresses capability, not permission.
+`$O` is the output format layer. Distinct from `$P` (access control) — `$O` addresses form, not permission.
+
+The starting point: lightweight models can read DCP format with adequate adjustment. Reading tests confirm this. So this is a deliberate formatting choice. A consumer may receive only the fields it needs, reshaped for readability, filtered to relevant positions.
+
+```
+["$O","log:v1", "ts", "level", "msg"]
+  → subset of fields, same positional structure
+  ["log:v1", "ts", "level", "msg"]
+  → lightweight model reads directly
+```
+
+From this base, `$O` extends to a higher-compression form: bit flags + component vector. Where the standard `$O` selects and shapes fields, the flag+vector form collapses them into a minimum-byte representation — schema-grounded, near-reversible, suitable for high-frequency streams or extremely constrained consumers.
 
 ```
 ["$O","receptor:v1", 0x0024, [0.7, 0.2, 0.0, 0.4]]
                       ^flags  ^component vector
+  → same semantic content as a full DCP row
+  → maximum compression density
 ```
 
-An agent that cannot parse DCP protocol receives `$O` instead. No format branching in the stream — `$O` makes one stream universally consumable. Bit flags + component vector carry the same semantic content as a full DCP array, at maximum compression density. Near-reversible when schema-grounded. See [Shadow — Output ($O)](./shadow-output).
+No format branching in the stream. `$O` is the projection layer — from full DCP down to bit flags, one shadow covers the range. See [Shadow — Output ($O)](./shadow-output).
 
 ### Other shadows
 
