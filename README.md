@@ -5,6 +5,8 @@ Compact structured data delivery for AI agents. Positional arrays, schema regist
 [dcp-docs.pages.dev](https://dcp-docs.pages.dev).
 > Implementation: 
 [github.com/hiatamaworkshop/dcp-wrap](https://github.com/hiatamaworkshop/dcp-wrap)
+> 
+[github.com/hiatamaworkshop/dcp-rag](https://github.com/hiatamaworkshop/dcp-rag)
 
 ## Documentation
 
