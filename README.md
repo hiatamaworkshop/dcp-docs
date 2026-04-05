@@ -3,7 +3,8 @@
 Compact structured data delivery for AI agents. Positional arrays, schema registry, and adaptive density — because JSON was designed for humans, not for agents.
 
 [dcp-docs.pages.dev](https://dcp-docs.pages.dev).
-> Implementation: 
+> Implementation:
+> 
 [github.com/hiatamaworkshop/dcp-wrap](https://github.com/hiatamaworkshop/dcp-wrap)
 > 
 [github.com/hiatamaworkshop/dcp-rag](https://github.com/hiatamaworkshop/dcp-rag)
