@@ -11,7 +11,7 @@ Inference is slow and non-deterministic. The pipeline is fast and deterministic.
 The solution is separation:
 
 ```
-Data path:    source → Preprocessor → Gate ($V) → Router ($R) → consumers
+Data path:    source → Ingestor → Preprocessor → Gate ($V) → Router ($R) → consumers
                         ↑ synchronous, deterministic, microseconds
 
 Control path: $ST → Bot → $I → Brain AI → PostBox → PipelineControl
@@ -21,6 +21,20 @@ Control path: $ST → Bot → $I → Brain AI → PostBox → PipelineControl
 Data flows continuously. The control layer observes, deliberates, and updates — without ever blocking a row.
 
 ## Layers
+
+### Ingestor — source adapter
+
+The Ingestor sits at the entry point of the pipeline. Its sole responsibility is to adapt any raw source into DCP packets — it is transport-agnostic and format-agnostic.
+
+```
+Raw source (HTTP POST / UDS socket / UDP datagram / Kafka / file …)
+  ↓
+Ingestor    ← convert to DCP packet format ($S header + fields)
+  ↓
+Preprocessor
+```
+
+The Ingestor does not validate, filter, or inspect content. It only converts the transport envelope into the internal DCP representation. Swapping HTTP for UDP requires replacing the Ingestor only — nothing downstream changes.
 
 ### Preprocessor — upstream normalization
 
