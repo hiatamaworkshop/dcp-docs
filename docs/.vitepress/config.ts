@@ -15,6 +15,7 @@ export default defineConfig({
       { text: 'Home', link: '/' },
       { text: 'Protocol', link: '/dcp/specification' },
       { text: 'Research', link: '/research/format-comparison' },
+      { text: 'Demos', link: '/demos/minecraft' },
     ],
 
     sidebar: [
@@ -34,6 +35,12 @@ export default defineConfig({
         items: [
           { text: 'Format Comparison', link: '/research/format-comparison' },
           { text: 'Lightweight LLM & Density', link: '/research/lightweight-llm' },
+        ]
+      },
+      {
+        text: 'Demos',
+        items: [
+          { text: 'Minecraft Pipeline', link: '/demos/minecraft' },
         ]
       }
     ],
