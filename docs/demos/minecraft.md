@@ -31,6 +31,8 @@ IngestionBus
 
 **Brain AI used**: `GameRuleBrain` — a rule-based `BrainAdapter` with no LLM. The same interface accepts Claude (Haiku) via `BRAIN_MODE=claude`.
 
+> **Note on Bot / L-LLM**: The pipeline.md design describes a Bot that calls an L-LLM on weapon fire. In this demo, the L-LLM step is omitted — Weapon filters write `$I` packets directly. The L-LLM is an optional enrichment layer; the control flow (Weapon → `$I` → Brain) is identical with or without it.
+
 ## Schemas
 
 ```
@@ -127,6 +129,7 @@ The record is re-injected into the Preprocessor. No data is lost. No pipeline re
 |---------|-----------|----------|
 | Speed anomaly | `player_move:v1` packet with `severity = "high"` | `rerouteSchema → audit-pipeline` |
 | Combat cluster | `combat:v1` packet with `severity = "high"` or `"medium"` | `rerouteSchema → pvp-pipeline` + `validationUpdate damage.max → 15` |
+| Rapid placement | `block_place:v1` packet with `severity = "medium"` or `"high"` | `throttle block_place:v1 → 100 rps` |
 | Schema evolution | `quarantine.reason = "unknown_field"` | `quarantineApprove` |
 | Anomaly cleared | No triggering packets in current Brain tick | Restore previous routing + `$V` |
 
