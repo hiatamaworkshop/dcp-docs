@@ -100,6 +100,49 @@ A **Weapon** is a named, configurable `$ST` filter. Any weapon firing triggers t
 
 The L-LLM is called exactly once per trigger. Everything before it is deterministic arithmetic.
 
+### $I Correlator — cross-schema grouping
+
+When multiple Weapons fire within the same tick window, each produces an independent `$I` packet. Without grouping, Brain sees three separate signals and evaluates them in isolation. With a Correlator, those signals are recognized as facets of a single incident.
+
+```
+Weapon A fires → L-LLM → $I(schema=combat:v1,    signal=cluster,  entityId=player-1)
+Weapon B fires → L-LLM → $I(schema=player_move:v1, signal=anomaly, entityId=player-1)
+Weapon C fires → L-LLM → $I(schema=block_place:v1, signal=burst,   entityId=player-1)
+  ↓
+$I Correlator
+  - ts proximity   → same 2s window
+  - entityId match → same player
+  - schema co-occurrence → combat + player_move + block_place
+  ↓
+$I group { groupId, packets: [A, B, C], correlationKeys: [entityId, window] }
+  ↓
+Brain: evaluates group as one incident — "multi-vector cheat behavior"
+```
+
+**Why this matters:**
+
+1. **L-LLM cost** — three concurrent weapon fires become one grouped call instead of three independent calls.
+2. **Brain decision quality** — `combat:v1` + `player_move:v1` co-firing on the same `entityId` in the same window is qualitatively different from either signal alone. Individual evaluation loses that signal; grouped evaluation captures it.
+
+**Grouping keys (in priority order):**
+
+| Key | Source | What it captures |
+|-----|--------|-----------------|
+| `ts` proximity | `$I.ts` | Same Brain tick window |
+| `entityId` match | `$I.entityId` (optional field) | Same player or entity origin |
+| `pipelineId` match | `$I.pipelineId` | Same processing path |
+| schema co-occurrence | `$I.schemaId` set | Compound event pattern |
+
+`entityId` is not currently part of the base `$I` packet — it must be added by the Weapon or sourced from the `$ST` record. Without it, the Correlator groups by window and schema co-occurrence only.
+
+**Responsibility boundary:**
+
+- Bot: perceives, labels, produces `$I` per schema. No cross-schema awareness.
+- $I Correlator: groups `$I` packets by correlation keys, assigns `groupId`. No control decisions.
+- Brain: evaluates groups (and ungrouped singles), writes to PostBox.
+
+The Correlator sits between the ring buffer and Brain's `evaluate()` call. It is stateless within a tick — it sees the current window's `$I` pool and outputs groups. Brain remains the sole decision-maker.
+
 ### Brain AI — control, not data
 
 Brain AI reads `$I` packets from the ring buffer at its own pace. It evaluates patterns across schemas and time, then writes decisions to the PostBox.
@@ -174,3 +217,157 @@ The separation of data path and control path is not an engineering preference. I
 At 1M rows/sec, a 500ms LLM call would drain 500,000 rows. Those rows cannot wait. The only viable architecture is one where the pipeline is self-sufficient by default and AI updates it asynchronously.
 
 **The pipeline runs. AI watches. When AI acts, the pipeline adjusts — without stopping.**
+
+## Shadow weight pattern — Brain optimal-value search
+
+When Brain AI needs to find an optimal threshold (e.g. the tightest `$V` constraint that still maintains acceptable pass rate), it should not guess and apply — it should observe and confirm first.
+
+The pattern uses the shadow layers as a dry-run environment:
+
+```
+Live stream
+  ↓ $O inject + weight transform   (field values scaled, not routed elsewhere)
+Shadow stream (virtual, same pipeline)
+  ↓
+$ST-O (shadow-only statistics window)
+  ↓
+Brain AI observes shadowStats
+  ↓
+Apply to live pipeline only when shadow confirms the outcome
+```
+
+**Why this matters**: Brain AI decisions (like `validationUpdate`) are irreversible within a tick — once applied, they affect every subsequent row. The shadow pattern converts a blind write into a confirmed write.
+
+### Example — finding optimal damage.max
+
+```typescript
+// Brain receives both live and shadow $ST
+const live   = input.stats["live"]["combat:v1"].passRate;
+const shadow = input.stats["shadow-strict"]["combat:v1"].passRate;
+
+if (live - shadow < 0.05) {
+  // shadow-strict maintains nearly identical pass rate → safe to apply live
+  return { validationUpdate: { damage: { max: strictMax } } };
+}
+// Shadow shows significant drop → hold, do not apply
+return { rationale: "shadow pass_rate drop too large — holding $V update" };
+```
+
+### $O transform as the weight knob
+
+`$O` is the mechanism that generates the shadow stream. By applying a numeric transform to a field before the shadow copy enters `$ST`, Brain AI can test multiple weight values in parallel:
+
+```
+$O transform: damage * 0.5  → shadow-w0.5  → $ST-O["shadow-w0.5"]
+$O transform: damage * 0.75 → shadow-w0.75 → $ST-O["shadow-w0.75"]
+$O transform: damage * 1.0  → shadow-w1.0  → $ST-O["shadow-w1.0"]  (baseline)
+```
+
+Brain reads all three $ST-O windows and selects the weight closest to the target pass rate. This is **safe experimentation inside the pipeline** — no data is rerouted, no live constraint changes until Brain confirms.
+
+### Properties
+
+| Property | Value |
+|----------|-------|
+| Data path impact | None — shadow stream is observational only |
+| Brain role | Observes $ST-O, decides weight, writes `validationUpdate` once |
+| Reversibility | Shadow transform is stateless — stop anytime |
+| Latency | Shadow $ST-O available on next window close (same 2s tick as live $ST) |
+
+This pattern preserves the core invariant: **LLM never enters the data path**. The shadow stream is computed by the pipeline itself; Brain AI reads the result and writes a single decision.
+
+## Predictive Control Pattern — statistically grounded decisions
+
+The shadow weight pattern extends naturally into predictive control: Brain AI runs multiple weight scenarios in parallel and identifies risk cases before they occur in the live stream.
+
+```
+Live stream (current state)
+  ↓ $O transform — parallel scenarios
+  ├── shadow-w1.0  (baseline)
+  ├── shadow-w1.2  (optimistic: +20%)
+  └── shadow-w1.5  (pessimistic: +50%)
+       ↓ each passes through $V independently
+  $ST-O per scenario
+       ↓
+  Brain: identifies which scenario crosses risk threshold
+       ↓
+  Preemptive $V or $R change — before the live stream reaches that state
+```
+
+Brain does not guess. It reads the $ST-O numbers and acts on them.
+
+### Traceability — breaking the AI blackbox
+
+Every Brain decision in this pattern traces back to observable statistics:
+
+| Element | What it records |
+|---------|----------------|
+| `$O transform coefficient` | What assumption was made ("what if damage increases 50%") |
+| `$ST-O value` | What the pipeline observed under that assumption |
+| `Brain rationale` | Which number triggered the decision and why |
+| `MappingLayer set()` | What changed, from what value, to what value |
+
+These four together make every Brain action fully reproducible after the fact. Post-hoc analysis becomes: find the $ST-O observation → find the Brain rationale → find the MappingLayer diff.
+
+**AI decisions are statistically grounded — every Brain action traces back to $ST-O observations, not model intuition.**
+
+This is the key distinction from conventional AI monitoring, where the model's internal state is opaque and decisions cannot be audited without re-running inference. In DCP, the pipeline computes the evidence; the Brain reads it; the MappingLayer records it. The inference step is narrow and its inputs are fully visible.
+
+### Example — preemptive combat $V tightening
+
+```typescript
+const baseline    = input.shadowStats["shadow-w1.0"]["combat:v1"].passRate;  // 0.98
+const optimistic  = input.shadowStats["shadow-w1.2"]["combat:v1"].passRate;  // 0.81
+const pessimistic = input.shadowStats["shadow-w1.5"]["combat:v1"].passRate;  // 0.61
+
+// pessimistic scenario crosses combatCluster threshold (pass_rate < 0.80)
+if (pessimistic < 0.80 && baseline > 0.90) {
+  return {
+    validationUpdate: { damage: { max: strictMax } },
+    rationale: `preemptive $V tighten: shadow-w1.5 pass_rate=${pessimistic} < 0.80 threshold`,
+  };
+}
+```
+
+The rationale string is not decorative — it is the audit trail. When this decision is reviewed later, the exact $ST-O value that triggered it is recorded in the Brain output.
+
+## Shadow Lifecycle — on-demand vs always-on
+
+Shadow streams are not free: each active `$O` transform adds processing load proportional to the live throughput. The right deployment mode depends on cost tolerance and response latency requirements.
+
+### Always-on (parallel multi-weight)
+
+```
+main pipeline ──$R──→ shadow-w1.0  (baseline)
+                  ├──→ shadow-w1.2  (+20%)
+                  └──→ shadow-w1.5  (+50%)
+```
+
+Brain can read all three $ST-O windows at any moment with zero startup lag. Appropriate when **response speed outweighs processing cost** — financial streams, security monitoring, latency-critical pipelines. The tradeoff: every row is processed N times, where N is the number of active shadows.
+
+### On-demand (Brain-triggered)
+
+```
+Normal:        main pipeline only
+$ST trend:     Brain detects pass_rate slope declining
+               → Brain writes: mountShadow("shadow-w1.5", { transform: { damage: 1.5 } })
++2s (1 tick):  $ST-O["shadow-w1.5"] available
+               → Brain reads, decides, writes validationUpdate
+               → Brain writes: unmountShadow("shadow-w1.5")
+```
+
+Shadow lifetime: **mount → 1 window → read → unmount**. The shadow exists only long enough to produce one confirmed observation. For most streaming workloads this is sufficient — the Brain acts before the live stream reaches the projected state.
+
+### Why replay is not the right tool here
+
+Replay reprocesses historical data. If traffic distribution has shifted since the recording, replay-derived weights reflect the past, not the present. On-demand shadows run against the live stream — they track current distribution automatically. Replay belongs in schema design and offline baseline calibration, not in the live control loop.
+
+### Choosing a mode
+
+| Condition | Mode |
+|-----------|------|
+| Throughput headroom available, fast response required | Always-on |
+| High throughput, cost-sensitive | On-demand, triggered by $ST slope |
+| Schema design / offline tuning | Replay (not a shadow) |
+
+The on-demand pattern is the default recommendation. Always-on is an operational choice made when the cost is acceptable and the latency budget demands it — not a requirement of the architecture.
