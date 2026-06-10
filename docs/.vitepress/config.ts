@@ -41,6 +41,7 @@ export default defineConfig({
         text: 'Demos',
         items: [
           { text: 'Minecraft Pipeline', link: '/demos/minecraft' },
+          { text: 'Lighthouse Model', link: '/demos/lighthouse' },
         ]
       }
     ],
