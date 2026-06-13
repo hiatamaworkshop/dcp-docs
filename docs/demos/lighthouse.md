@@ -1,6 +1,6 @@
 # Lighthouse Model Demo
 
-> **Status: Pilot complete.** AR / CG / RC scenarios verified. 103 tests, 0 fail.
+> **Status: Pilot complete.** AR / CG / RC scenarios verified. 113 tests, 0 fail.
 
 A demonstration of the Lighthouse Model: using the DCP Pipeline as an **observation layer** for agentic code generation streams. The core claim — that you can re-observe stored raw data through a different lens without touching the live stream — is what this demo proves.
 
@@ -65,11 +65,13 @@ Four agents: `agent-A` (baseline, 95% pass) · `agent-B` (broad coverage, 88%) �
 
 ## Scenario AR — Agent Regression
 
-**Trigger**: `agent-C` pass rate drops from 95% → 70% and stays below 80% for ≥ 3 consecutive ticks.
+**Trigger**: `agent-C` pass rate drops from 95% → 70% and stays below its *learned per-agent threshold* for ≥ 2 consecutive ticks.
+
+Thresholds are per-agent, not a single global bar. Each agent's healthy pass rate is tracked with an EWMA baseline; "regression" means a drop of 0.10 below *that agent's* normal. A global 0.80 bar sat only ~1.9σ above a legitimately-low-baseline agent (agent-B at 0.88), firing spurious regressions on quiet baseline (~30% of seeds); the per-agent threshold (baseline − 0.10) removes that.
 
 ```
-TestorAdapter window (5s): agent-C pass rate crosses below 0.80
-RuleBrain.checkAR(): agentRegressionTicks["agent-C"] = 3 → fires
+TestorAdapter window (5s): agent-C pass rate crosses below its threshold (≈0.85)
+RuleBrain.checkAR(): agentRegressionTicks["agent-C"] = 2 → fires
 ```
 
 **Brain decision**:
@@ -113,12 +115,12 @@ This is the scenario that justifies the retention buffer.
 
 **What happens in the world**: `agent-C` pass rate drops to 20% for 2 seconds (≈ 25 events), then returns to 95%. Under the coarse live view (10s window), this 2-second dip is diluted: window mean stays close to the baseline.
 
-**What Brain sees**: `agent-C` pass rate dips briefly into `[0.40, 0.80)` then recovers above 0.80. This recovery signature is the trigger.
+**What Brain sees**: `agent-C` pass rate dips briefly into `[0.40, agentThreshold)` then recovers above its threshold. This recovery signature is the trigger.
 
 ```
 RuleBrain.checkRC():
-  tick N:   agent-C passRate = 0.65 → agentDipActive.add("agent-C")
-  tick N+1: agent-C passRate = 0.65 → still in dip zone
+  tick N:   agent-C passRate = 0.65 → confirmed dip (≥ DIP_REQUIRE_TICKS)
+  tick N+1: agent-C passRate = 0.65 → still in dip zone (≤ DIP_MAX_TICKS)
   tick N+2: agent-C passRate = 0.92 → recovered above threshold
             agentDipActive.has("agent-C") → replayRequest fires
 ```
@@ -148,11 +150,11 @@ The fine-window replay produces **dip tiles** at the burst windows (mean ≈ 0.2
 
 | Rule | Trigger | Condition | Decision |
 |------|---------|-----------|----------|
-| AR | `agent.passRate < 0.80` | Sustained for ≥ 3 ticks | `rerouteSchema` (once per regression) |
+| AR | `agent.passRate < baseline − 0.10` (per-agent) | Sustained for ≥ 2 ticks | `rerouteSchema` (once per regression) |
 | CG | `domain.gap > 4` | Sustained for ≥ 5 ticks | `schemaUpdate` (once per domain) |
-| RC | passRate in `[0.40, 0.80)` then recovery | Recovery above 0.80 after dip | `replayRequest` (once per session) |
+| RC | passRate in `[0.40, agentThreshold)` then recovery | Recovery above threshold after a 2–7 tick dip | `replayRequest` (once per session) |
 
-All rules re-arm: AR when pass rate returns above 0.80, CG when gap closes, RC after `brain.reset()`.
+Per-agent thresholds = learned EWMA baseline − 0.10, trusted after a 10-tick warmup; the baseline is frozen while an agent is below threshold so a regression can't re-normalize itself. AR re-arms when pass rate returns above the agent's threshold, CG when the gap closes, RC after `brain.reset()`. `reset()` clears per-scenario detection state but keeps the learned baselines (long-lived agent knowledge).
 
 ## SnapshotCurator tiles
 
