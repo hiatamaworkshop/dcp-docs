@@ -24,6 +24,8 @@ The observation layer does not have fixed settings. Window length, grouping axis
 
 This is the same separation that `$O` applies to output format — Brain writes to a shadow, the layer reacts. The direction is reversed: `$O` is downstream of observation (shapes the output), `$Q` is upstream (shapes the input to aggregation). Both preserve the core property: **the inferential layer touches only declarative data, never executing pipeline logic directly**.
 
+The write surface is not limited to `$Q[observe]`. Interpretation thresholds that more than one Brain implementation must agree on — "how far below its learned baseline counts as a regression" — are promoted to `$Q[schema]` rows and read live by the Brain, not compiled into it. This is demonstrated, not just claimed: writing `baseline_delta` to `$Q[schema]` mid-flight reconfigures the running Brain's regression threshold on its next tick, with no restart and no code path from the writer to the reader other than the shadow row itself.
+
 **2. Retroactive re-observation**
 
 Because the pipeline retains raw events for `retention_window_ms`, a past segment can be re-observed any number of times, with any `$Q[observe]` parameters — including parameters that did not exist when the segment first streamed through.
@@ -31,6 +33,8 @@ Because the pipeline retains raw events for `retention_window_ms`, a past segmen
 This is not variance reduction by re-reading. N samples carry N samples' worth of information, and circulating them does not add precision. What retroactive re-observation provides is the ability to ask "what did that window look like at 1-second resolution?" about a period that was aggregated at 10-second resolution when it was live. The answer is already there — in the retained raw events. Replay applies a new lens to old data.
 
 The honest precedent is event sourcing: keep the raw events, derive views on demand. The addition is that the lens (`$Q[observe]`) is Brain-controlled data, so re-derivation uses a *different aggregation* than the original. Stream observation stops being a one-pass read and becomes a re-readable archive.
+
+Re-observation is also *targeted*, not bulk. A replay proposal carries the segment bounds (`fromTs`/`toTs`) alongside the lens, and the Brain derives those bounds from its own detection state — the timestamps at which it first noticed the dip and later saw recovery, padded by the coarse window's own smear. The Brain does not say "re-read everything"; it says "re-read the interval where my live view told me something happened, through this finer lens."
 
 **3. The world changed vs. the lens changed**
 
@@ -45,6 +49,8 @@ When Brain changes `window_ms` and the shape changes, that is lens-change, not w
 
 This property is what the RC (Retroactive Re-observation) scenario demonstrates: a failure burst that the coarse live view averaged away appears in the fine-window replay as a dip tile. The world recorded it. The original lens missed it. The lens change revealed it. All three facts are present in the artifact.
 
+*A third axis, surfaced by real data.* On a mock stream events always arrive, so "world vs. lens" is the whole story. Applying the mechanism to a real, sparse transport surfaces a third thing the absence of events can mean: **the world is silent** (no activity — normal) versus **the observer is blind** (the transport is down — we stopped seeing). A gap signal that reads only event flow conflates the two and false-fires on normal quiet. The fix is to treat **transport liveness as a first-class observation input, separate from event flow** — a gap is "blind" only when liveness says the channel is down. The world changing, the lens changing, and the observer's own sight failing are three independent axes the observation layer must keep apart.
+
 ## What the domain is not
 
 The lighthouse model is demonstrated on a `test_result:v1` stream — unit test pass/fail events attributed to AI code-generation agents. This is the demonstration vehicle. It is not the definition of the model.
@@ -52,6 +58,8 @@ The lighthouse model is demonstrated on a `test_result:v1` stream — unit test 
 The choice of domain was motivated by the scale problem above: unit tests arrive at high frequency, are cheap per event, and localize to well-defined code regions. Those properties make the observation mechanics easy to verify against known ground truth. Any high-frequency stream with similar properties — game events, sensor readings, API call traces — admits the same mechanics. The domain is a skin.
 
 The test-code framing in `dcp-lighthouse/` exists because the development era that motivates the model (AI-volume code generation) is also the era where test events are the most natural demonstration stream. But the claim being made is about observation infrastructure, not about code quality tooling. The code-quality application is one instance of the model, not the model itself.
+
+The skin claim extends further than structured streams. Unstructured text — news mentions, official announcements, raw social chatter — fits the same mechanics once one refuses the temptation to *understand* it in the pipeline. The deterministic layer does lightweight parsing only (source, timestamp, keyword hits) and emits it as an event stream (`mention:v1`); what the observation layer then watches is the **statistics of mention flow** — frequency, burstiness, source mix, silence — not the meaning of any individual text. Interpretation of content stays in the inferential layer, where it belongs. "The world got louder about X" is a shape on a stream, and shapes on streams are exactly what the lighthouse already observes.
 
 ## Four-layer separation
 
