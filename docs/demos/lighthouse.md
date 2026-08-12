@@ -1,6 +1,6 @@
 # Lighthouse Model Demo
 
-> **Status: Pilot complete.** AR / CG / RC scenarios verified. 113 tests, 0 fail.
+> **Status: Pilot complete.** AR / CG / RC scenarios verified. 194 tests, 0 fail.
 
 A demonstration of the Lighthouse Model: using the DCP Pipeline as an **observation layer** for agentic code generation streams. The core claim — that you can re-observe stored raw data through a different lens without touching the live stream — is what this demo proves.
 
@@ -9,7 +9,7 @@ A demonstration of the Lighthouse Model: using the DCP Pipeline as an **observat
 The observation layer mechanics, not the domain:
 
 - A live `test_result:v1` stream flows continuously. The observation layer attaches on top — the stream is never paused or blocked.
-- **$Q** holds observation parameters (`window_ms`, `group_by`, etc.). Brain changes $Q; LensViews react live.
+- **$Q** holds observation parameters (`window_ms`, `align`/`origin`, `group_by`, etc.). The window grid itself is lens state, shared by every reader, not a property of whichever query asked for it. Brain changes $Q; LensViews react live.
 - **RetentionBuffer** keeps raw events in a ring buffer. Brain can trigger replay at any time.
 - **SnapshotCurator ($U)** mechanically classifies the observed shape into tiles: spike, dip, gap, step, divergence, baseline.
 - **RuleBrain** fires three rule types: `rerouteSchema` (AR), `schemaUpdate` (CG), `replayRequest` (RC).
@@ -129,7 +129,10 @@ RuleBrain.checkRC():
 ```
 replayRequest: {
   agentId: "agent-C",
-  qProposal: { scope: "observe:test_result:v1#fine", params: { window_ms: 1000 } }
+  qProposal: {
+    scope: "observe:test_result:v1#fine",
+    params: { window_ms: 1000, align: "epoch", group_by: ["agentId"], fromTs, toTs }
+  }
 }
 ```
 
@@ -137,12 +140,12 @@ replayRequest: {
 
 ```
 index.ts receives replayRequest
-  → buffer.replay({ window_ms: 1000 })   (retained 120s of raw events)
-  → curator.curate(fineResult)            (SnapshotCurator runs on fine-window output)
-  → dashboard.broadcastReplay(pkg)        (SSE push to /events/decisions)
+  → buffer.replay({ window_ms: 1000, align: "epoch", group_by: ["agentId"], fromTs, toTs })
+  → curator.curate(fineResult, referenceResult)   (SnapshotCurator scores each group against its own reference)
+  → dashboard.broadcastReplay(pkg)                 (SSE push to /events/decisions)
 ```
 
-The fine-window replay produces **dip tiles** at the burst windows (mean ≈ 0.20 vs global mean ≈ 0.78, z ≈ −2.0). The coarse view shows nothing anomalous. The contrast is the artifact.
+The fine-window replay produces **dip tiles** at the burst windows. Grouping by `agentId` matters here: scored against the four-agent mixture, agent-C's dip is diluted by the other three agents' healthy pass rate and reads as a shallow signal; scored against agent-C's own history within its group it reads as a clear, unambiguous dip (measured on a seeded fixture: 1.77σ mixed vs. 3.51σ grouped). The coarse view shows nothing anomalous. The contrast is the artifact.
 
 **Criterion**: Fine-window replay recovers the injected burst at the known position and magnitude. The dip tile `regionStart` aligns with the `burst_start` entry in the scenario truth log.
 
@@ -162,13 +165,15 @@ Per-agent thresholds = learned EWMA baseline − 0.10, trusted after a 10-tick w
 
 | ShapeTag | Detection | Typical source |
 |----------|-----------|----------------|
-| `spike` | z-score ≥ 2.0 (positive) | Unusual pass rate burst |
-| `dip` | z-score ≤ −2.0 (negative) | Failure burst (RC fine-window) |
+| `spike` | z-score ≥ threshold (positive) | Unusual pass rate burst |
+| `dip` | z-score ≤ −threshold (negative) | Failure burst (RC fine-window) |
 | `step_up` | Sustained mean elevation ≥ 3 windows | Improvement regime |
 | `step_down` | Sustained mean drop ≥ 3 windows | AR regression tail |
 | `gap` | No events for > 2× window_ms | CG coverage hole |
 | `divergence` | Two lenses disagree at same window | Coarse/fine contrast |
 | `baseline` | Window closest to global mean | Reference point |
+
+The spike/dip threshold is not a fixed 2.0σ constant — it is solved per package via a Šidák correction across however many windows (and, with `group_by`, groups) the package actually scores, so the package's overall false-alarm rate stays fixed regardless of how many independent looks it took. On a seeded 31-run measurement this brought the package-level false-alarm rate from 29% (fixed 2σ) down to 6.5%, without weakening real detections. The Šidák family is package-wide, not per group — a per-group budget would re-inflate the same false-alarm rate the correction removed.
 
 Tiles are sorted by type priority (spike/dip first, baseline last), then chronologically within type. The package is what Brain — rule-based or LLM — sees instead of raw time series.
 
