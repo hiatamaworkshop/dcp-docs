@@ -1,6 +1,6 @@
 # Lighthouse Model Demo
 
-> **Status: Pilot complete.** AR / CG / RC scenarios verified. 194 tests, 0 fail.
+> **Status: L1–L5 complete.** AR / CG / RC scenarios verified; a real LLM Brain (`ClaudeBrain`) runs in shadow beside the rule-based primary. 390 tests, 0 fail.
 
 A demonstration of the Lighthouse Model: using the DCP Pipeline as an **observation layer** for agentic code generation streams. The core claim — that you can re-observe stored raw data through a different lens without touching the live stream — is what this demo proves.
 
@@ -29,22 +29,26 @@ MockStreamGenerator (test_result:v1, 50 evt/s)
   ↓  onEvent
 TestorAdapter         ← per-agent / per-domain aggregation → STSnapshot
   +
-RetentionBuffer       ← ring buffer (120s raw events, RC replay)
+RetentionBuffer       ← freshness zone (ring, full resolution)
+                         + reference zone (thinned, opt-in, $Q-resizable)
   +
 ObservationOverlay    ← "coarse" (10s window)  "fine" (1s window)
                          both read $Q[observe] live
   ↓  tick (1s)
-RuleBrain             ← observe(STSnapshot) → decide() → BrainDecision[]
-  ↓
-  ├─ rerouteSchema    → console + dashboard SSE
-  ├─ schemaUpdate     → console + dashboard SSE
-  └─ replayRequest    → buffer.replay({window_ms}) → SnapshotCurator
-                         → broadcastReplay(pkg) → dashboard SSE
+RuleBrain             ← observe(STSnapshot) → decide() → BrainDecision[]  (primary)
+ClaudeBrain           ← same STSnapshot, async deliberation, own cadence  (shadow)
+  ↓                                          ↓
+  ├─ rerouteSchema   → console + dashboard SSE  ├─ shadow-logged only, gated
+  ├─ schemaUpdate    → console + dashboard SSE  │   against curator before
+  └─ replayRequest   → buffer.replay(params)    │   being printed as "backed"
+                        → SnapshotCurator        └─ replayRequest → same replay path
+                        → broadcastReplay(pkg) → dashboard SSE
   ↓
 DashboardServer       ← SSE :3001 (/events/snapshot, /events/decisions)
+                         REST: /control/replay, /control/*, /brain, /status
 ```
 
-**Brain AI used**: `RuleBrain` — a deterministic `BrainAdapter` with no LLM. The same interface accepts `ClaudeBrain` via `BRAIN_MODE=claude`.
+**Brain AI used**: `RuleBrain` is the deterministic primary `BrainAdapter`. `ClaudeBrain` (`BRAIN_MODE=claude`) is a real, measured LLM implementation of the same interface — it deliberates asynchronously (its own cadence, decoupled from the 1s tick) and runs in **shadow only**: its decisions are logged and gated against the curator but never drive the pipeline. See [ClaudeBrain (shadow)](#claudebrain-shadow) below.
 
 ## Event schema
 
@@ -173,9 +177,34 @@ Per-agent thresholds = learned EWMA baseline − 0.10, trusted after a 10-tick w
 | `divergence` | Two lenses disagree at same window | Coarse/fine contrast |
 | `baseline` | Window closest to global mean | Reference point |
 
-The spike/dip threshold is not a fixed 2.0σ constant — it is solved per package via a Šidák correction across however many windows (and, with `group_by`, groups) the package actually scores, so the package's overall false-alarm rate stays fixed regardless of how many independent looks it took. On a seeded 31-run measurement this brought the package-level false-alarm rate from 29% (fixed 2σ) down to 6.5%, without weakening real detections. The Šidák family is package-wide, not per group — a per-group budget would re-inflate the same false-alarm rate the correction removed.
+The spike/dip threshold is not a fixed 2.0σ constant — it is solved per package via a Šidák correction across however many windows (and, with `group_by`, groups) the package actually scores, so the package's overall false-alarm rate stays fixed regardless of how many independent looks it took. On a seeded 31-run measurement this brought the package-level false-alarm rate from 29% (fixed 2σ) down to 6.5%; a follow-up continuity correction (detected via the `sumSq/count` identity rather than by assuming a smooth error, since the residual came from grid coarseness plus a structurally unreachable upper tail, not skew) brought it further down to 4.40%, matching the 4.55% design target. Neither correction weakens real detections. The Šidák family is package-wide, not per group — a per-group budget would re-inflate the same false-alarm rate the correction removed.
 
 Tiles are sorted by type priority (spike/dip first, baseline last), then chronologically within type. The package is what Brain — rule-based or LLM — sees instead of raw time series.
+
+`agg_func: "median"` is supported on the lens chain (exact via raw-value retention, so `downsample_factor` still pools losslessly by concatenating values before recomputing) but the curator does not attempt to score it: a package built on a median window sets `aggFuncUnscored: true` and returns zero tiles rather than running the z-test machinery, which assumes Gaussian per-window means. This is the "silence vs. blindness" discipline applied to a statistic, not just to missing data — the curator declines to judge, but the raw `values`/`mean` stay readable on the `LensResult` itself.
+
+## ClaudeBrain (shadow)
+
+`ClaudeBrain implements BrainAdapter` with a real Anthropic API call in place of `RuleBrain`'s rules. Two design constraints shaped it:
+
+- **Deliberation is decoupled from the tick.** `decide()` stays synchronous and the tick stays 1s; the model is neither. `observe()` may start an async deliberation (guarded by an in-flight latch plus a `minIntervalMs` floor — two independent spend guards), and `decide()` drains whatever has arrived. Because a decision surfaces several ticks after the snapshot that provoked it, `meta.snapshotTs` names *which data* the model was looking at — not the tick it happened to drain on.
+- **The proposal gate lives in the Brain, not at the write site.** `validateObserveParams` — the same rulebook `$Q` writes go through — runs before a `replayRequest` becomes a `BrainDecision` at all. A lens the rulebook would reject never reaches the decision log; rejections are counted (`stats.rejectedProposals`) rather than silently retried.
+
+**Measured (real API run, Sonnet 5, $0.49):** the core claim holds — every `replayRequest` correctly carried `window_ms: 1000` + `group_by: ["agentId"]`, and the stated reasons named the right mechanism. But **target identification does not**: the RC burst is caught, but so are quiet, event-free agents at a similar rate (2/17 vs. 5/17 in one run) — the model operates the lens correctly without reliably knowing *which* lens to point where.
+
+**A 2×2×2 discipline experiment** (QUIET/AR/RC × base/placebo/disciplined prompt × Sonnet 5/Sonnet 4.6, $1.41) separated "personality" from "how it's asked": a length-matched placebo moved nothing (p = 1.0), but adding real content collapsed the proposal rate from 14/22 to 3/25 (p = 0.0003) — the framing dominates, not the model. The catch: the same discipline block, phrased as one general "be more conservative" instruction in prose, landed on whichever channel each model happened to overuse and zeroed it out entirely rather than tuning it down — for Sonnet 5 that was the RC `replayRequest` channel itself, deleting the one capability the experiment most wanted to keep. Neither prompt variant is shipped; the conclusion drawn is architectural, not promptable: **keep the accept/reject gate in code (the curator), and let the LLM's contribution stay scoped to lens *selection*** — a decision that also avoids the transcription trap from the earlier A/B work (there is no curator judgment available for the model to copy).
+
+`GET /brain` exposes `ClaudeBrainStats` / the shadow-vs-primary tally for live inspection; nothing in this build promotes `ClaudeBrain` past shadow.
+
+## Reference zone and $Q\[pipeline] (L5)
+
+`RetentionBuffer` has two zones. The **freshness zone** is the original full-resolution ring (what RC replay reads). An opt-in **reference zone** sits behind it: instead of discarding evicted events, it keeps 1-in-N (a fixed thinning ratio) with `weight = N` on the survivor, so the same weighted-aggregation machinery built for `decay` (Kish effective-N, weighted pooling) prices the reference zone's coarser sampling without a second statistical code path. Both `retention_window_ms` (freshness) and the reference zone's width/thinning ratio are live `$Q[pipeline]` rows — a setter only *resizes* a zone that opted in at construction; `$Q` cannot cold-start a reference zone that wasn't configured when the buffer was built, and a ratio change is forward-only (already-thinned events keep the weight they were thinned under, so re-weighting can't retroactively rewrite history the way an anchor-slide bug would).
+
+`GET /control/replay?fromTs=&toTs=&window_ms=` is the reference zone's first real reader: a manual trigger that replays a span against the reference zone and scores it with the curator. Verified against a live server left running ~140s: a request for a span more than the freshness zone's width in the past correctly reports `referenceUsable: true`, pulled from the thinned zone rather than the (already-evicted) fresh ring.
+
+## Division of labor (§A)
+
+`ClaudeBrain`'s shadow-logged `rerouteSchema`/`quarantine` decisions carry a target `agentId` and the `snapshotTs` they were reasoned from — but a shadow decision is, by construction, never checked against anything before it's printed. `isReroutedAgentBacked()` closes that gap: on shadow-log, it re-runs an on-demand grouped replay (`group_by: ["agentId"]`) at the named timestamp and asks the curator whether that agent actually has a flagged tile there. Unbacked claims are counted separately (`ClaudeBrainStats.gateRejected`, distinct from `rejectedProposals` — malformed lens vs. an assertion the curator can't corroborate) rather than silently logged as fact. The gate deliberately does **not** read the always-on coarse live view — a multi-trial RC re-run found that view's dip detection inconsistent across runs, while the same on-demand grouped replay caught the injected burst reliably in all three; `schemaUpdate` (domain-coverage) gating is out of scope, since the curator has no matching judgment concept for it yet.
 
 ## Dashboard
 
@@ -188,6 +217,10 @@ REST endpoints:
 - `GET /demo/start?scenario=AR|CG|RC` — starts scenario (resets Brain state first)
 - `GET /demo/stop` — stops generator
 - `GET /status` — current load and active scenario
+- `GET /control/baseline-delta?value=` — write `$Q[schema].baseline_delta` live
+- `GET /control/coarse-downsample?factor=` — write the coarse view's `downsample_factor` live
+- `GET /control/replay?fromTs=&toTs=&window_ms=` — manual replay + reference-zone scoring (see [Reference zone](#reference-zone-and-q-pipeline-l5))
+- `GET /brain` — `ClaudeBrain`/`ShadowBrain` diagnostics (shadow tally, gate/reject counters); `{ mode: "rule" }` when no LLM Brain is running
 
 ## Source
 
@@ -199,10 +232,15 @@ REST endpoints:
 | `server/src/mock-stream-generator.ts` | test_result:v1 stream + AR/CG/RC injection |
 | `server/src/testor-adapter.ts` | TestEvent → STSnapshot (per-agent, per-domain) |
 | `server/src/q-registry.ts` | $Q observation parameter store |
-| `server/src/retention-buffer.ts` | Ring buffer + `replay(params)` |
-| `server/src/lens.ts` | `applyLens(segment, params)` — effector chain |
+| `server/src/retention-buffer.ts` | Freshness ring + opt-in thinned reference zone, `replay(params)` |
+| `server/src/lens.ts` | `applyLens(segment, params)` — full effector chain: `group_by → window_ms → downsample_factor → decay → agg_func` |
 | `server/src/lens-view.ts` | `ObservationOverlay` — parallel lenses on one stream |
 | `server/src/snapshot-curator.ts` | `SnapshotCurator ($U)` — shape tile selection |
 | `server/src/rule-brain.ts` | `RuleBrain` — AR / CG / RC rule implementation |
+| `server/src/brain-adapter.ts` | `BrainAdapter` interface + `ResettableBrain` |
+| `server/src/claude-brain.ts` | `ClaudeBrain` — LLM `BrainAdapter`, decoupled deliberation + proposal gate |
+| `server/src/shadow-brain.ts` | `ShadowBrain` — primary/shadow tally, never returns shadow decisions from `decide()` |
+| `server/src/anthropic-ask.ts` | Thin wrapper over the Anthropic Messages API used by `ClaudeBrain` |
+| `server/src/calibration.ts` | False-alarm-rate / detection-power measurement harness (takes a lens as an argument) |
 | `server/src/dashboard.ts` | SSE bridge + REST endpoints |
 | `dashboard/app.js` | Browser-side dashboard UI |
