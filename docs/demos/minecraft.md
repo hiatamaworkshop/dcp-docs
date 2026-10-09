@@ -158,7 +158,7 @@ The live SSE dashboard (`:3003`) shows all layers in real time:
 
 ## Source
 
-`dcp-minecraft/` in the dcp-wrap repository. Key files:
+`dcp-minecraft/` in the dcp-core repository. Key files:
 
 | File | Role |
 |------|------|
